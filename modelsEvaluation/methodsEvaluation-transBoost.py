@@ -1,8 +1,8 @@
 import pandas as pd
 import csv
 import time
-from sklearn.metrics import accuracy_score, classification_report, roc_curve
-from sklearn.model_selection import train_test_split
+from sklearn.metrics import accuracy_score, classification_report, roc_curve, confusion_matrix
+from sklearn.model_selection import train_test_split, GridSearchCV
 from sklearn.preprocessing import MinMaxScaler
 from xgboost import TransBoostClassifier
 
@@ -44,21 +44,23 @@ with open("models_results.csv", "a", newline="") as file:
     start_time = time.time()
     clf.fit(x_train, y_train, x_test, y_test)
     end_time = time.time()
-    exec_time = end_time - start_time
-    TBC_tpred = clf.predict(x_train)
-    TBC_tacc = accuracy_score(y_train, TBC_tpred)
+    best_exec_time = end_time - start_time
     y_pred = clf.predict(x_test)
     TBCacc = accuracy_score(y_test, y_pred)
-    report = classification_report(y_test, y_pred, output_dict=True)
-    print("------TransBoostClassifier------")
-    print(f'Accuracy on the train set: {TBC_tacc:.4f}')
+    cm = confusion_matrix(y_test, y_pred)
+    tn, fp, fn, tp = cm.ravel()
+    precision = tp / (tp + fp)
+    recall = tp / (tp + fn)
+    f1_score = 2 * ((precision * recall) / (precision + recall))
+    print("------TransBoost------")
     print(f'Accuracy on the test set: {TBCacc:.4f}')
     print(classification_report(y_test, y_pred))
     writer.writerow([
-        "TransBoost", round(TBC_tacc * 100, 2), round(TBCacc * 100, 2),
-        round(report['weighted avg']['precision'] * 100, 2),
-        round(report['weighted avg']['recall'] * 100, 2),
-        round(report['weighted avg']['f1-score'] * 100, 2),
+        "TransBoost", round(TBCacc * 100, 2),
+        round(precision, 2), round(recall, 2), round(f1_score, 2),
+        tn, fp, tp, fn,
         n_estimators,
-        exec_time
+        round(best_exec_time, 2),
+        round(best_exec_time, 2),
+        round(n_estimators/best_exec_time, 4)
     ])

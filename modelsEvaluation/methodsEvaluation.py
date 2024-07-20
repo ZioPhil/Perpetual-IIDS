@@ -4,6 +4,7 @@ import csv
 import time
 from catboost import CatBoostClassifier, CatBoostRegressor
 from lightgbm import LGBMClassifier, LGBMRegressor
+from matplotlib import pyplot as plt
 from ngboost import NGBClassifier, NGBRegressor
 from sklearn import svm
 from sklearn.ensemble import ExtraTreesClassifier, GradientBoostingClassifier, GradientBoostingRegressor, \
@@ -11,15 +12,15 @@ from sklearn.ensemble import ExtraTreesClassifier, GradientBoostingClassifier, G
     RandomForestClassifier, RandomForestRegressor, ExtraTreesRegressor
 from sklearn.linear_model import LogisticRegression, RidgeClassifier, Lasso, ElasticNet, LassoLars, \
     OrthogonalMatchingPursuit, SGDClassifier, SGDRegressor
-from sklearn.metrics import accuracy_score, classification_report, roc_curve
-from sklearn.model_selection import train_test_split
+from sklearn.metrics import accuracy_score, classification_report, roc_curve, confusion_matrix, ConfusionMatrixDisplay
+from sklearn.model_selection import train_test_split, GridSearchCV
 from sklearn.naive_bayes import GaussianNB, ComplementNB, CategoricalNB
 from sklearn.neighbors import KNeighborsClassifier, KNeighborsRegressor, NearestCentroid
 from sklearn.neural_network import MLPClassifier, MLPRegressor
 from sklearn.preprocessing import MinMaxScaler
 from sklearn.tree import DecisionTreeClassifier, DecisionTreeRegressor
 from perpetual import PerpetualBooster
-from starboost import BoostingRegressor
+from starboost import BoostingRegressor, BoostingClassifier
 from xgboost import XGBClassifier, XGBRegressor
 
 df = pd.read_csv("modbusDataset.csv", sep=",", header=0, index_col=None)
@@ -37,23 +38,21 @@ mms.fit(x_train)
 x_train = mms.transform(x_train)
 x_test = mms.transform(x_test)
 
-with open("models_results.csv", "w", newline="") as file:
+# TN = Benigno classificato come Benigno
+# TP = Maligno classificato come Maligno
+# FN = Maligno classificato come Benigno
+# FP = Benigno classificato come Maligno
+
+with open("models_results.csv", "a", newline="") as file:
     writer = csv.writer(file)
-    writer.writerow(['Name', 'Train Accuracy', 'Test Accuracy', 'Precision', 'Recall', 'F1-score', 'N Rounds',
-                     'Execution time'])
+    writer.writerow(['Name', 'Test Accuracy', 'Precision', 'Recall', 'F1-score', 'TN', 'FP', 'TP', 'FN', 'N Rounds',
+                     'Execution time NoCV  (s)', 'Execution time  (s)', 'Round/s'])
 
     clf = PerpetualBooster(objective="LogLoss")
     start_time = time.time()
     clf.fit(x_train, y_train, budget=0.1)
     end_time = time.time()
-    exec_time = end_time - start_time
-    PPB_tpred = clf.predict(x_train)
-    fpr, tpr, tresholds = roc_curve(y_train, PPB_tpred)
-    j_scores = tpr - fpr
-    optimal_idx = np.argmax(j_scores)
-    optimal_treshold = tresholds[optimal_idx]
-    y_pred = (PPB_tpred >= optimal_treshold).astype(int)
-    PPB_tacc = accuracy_score(y_train, y_pred)
+    best_exec_time = end_time - start_time
     PPBpred = clf.predict(x_test)
     fpr, tpr, tresholds = roc_curve(y_test, PPBpred)
     j_scores = tpr - fpr
@@ -61,1060 +60,642 @@ with open("models_results.csv", "w", newline="") as file:
     optimal_treshold = tresholds[optimal_idx]
     y_pred = (PPBpred >= optimal_treshold).astype(int)
     PPBacc = accuracy_score(y_test, y_pred)
-    report = classification_report(y_test, y_pred, output_dict=True)
-    print("------PerpetualBoosterClassifier------")
-    print(f'Accuracy on the train set: {PPB_tacc:.4f}')
+    cm = confusion_matrix(y_test, y_pred)
+    tn, fp, fn, tp = cm.ravel()
+    precision = tp / (tp + fp)
+    recall = tp / (tp + fn)
+    f1_score = 2 * ((precision * recall) / (precision + recall))
+    print("------PerpetualBooster------")
     print(f'Accuracy on the test set: {PPBacc:.4f}')
     print(classification_report(y_test, y_pred))
     writer.writerow([
-        "PerpetualBoosterClassifier", round(PPB_tacc * 100, 2), round(PPBacc * 100, 2),
-        round(report['weighted avg']['precision'] * 100, 2),
-        round(report['weighted avg']['recall'] * 100, 2),
-        round(report['weighted avg']['f1-score'] * 100, 2),
+        "PerpetualBooster", round(PPBacc * 100, 2),
+        round(precision, 2), round(recall, 2), round(f1_score, 2),
+        tn, fp, tp, fn,
         "",
-        round(exec_time, 2)
-    ])
-
-    clf = PerpetualBooster(objective="SquaredLoss")
-    start_time = time.time()
-    clf.fit(x_train, y_train, budget=0.1)
-    end_time = time.time()
-    exec_time = end_time - start_time
-    PPB_tpred = clf.predict(x_train)
-    fpr, tpr, tresholds = roc_curve(y_train, PPB_tpred)
-    j_scores = tpr - fpr
-    optimal_idx = np.argmax(j_scores)
-    optimal_treshold = tresholds[optimal_idx]
-    y_pred = (PPB_tpred >= optimal_treshold).astype(int)
-    PPB_tacc = accuracy_score(y_train, y_pred)
-    PPBpred = clf.predict(x_test)
-    fpr, tpr, tresholds = roc_curve(y_test, PPBpred)
-    j_scores = tpr - fpr
-    optimal_idx = np.argmax(j_scores)
-    optimal_treshold = tresholds[optimal_idx]
-    y_pred = (PPBpred >= optimal_treshold).astype(int)
-    PPBacc = accuracy_score(y_test, y_pred)
-    report = classification_report(y_test, y_pred, output_dict=True)
-    print("------PerpetualBoosterRegressor------")
-    print(f'Accuracy on the train set: {PPB_tacc:.4f}')
-    print(f'Accuracy on the test set: {PPBacc:.4f}')
-    print(classification_report(y_test, y_pred))
-    writer.writerow([
-        "PerpetualBoosterRegressor", round(PPB_tacc * 100, 2), round(PPBacc * 100, 2),
-        round(report['weighted avg']['precision'] * 100, 2),
-        round(report['weighted avg']['recall'] * 100, 2),
-        round(report['weighted avg']['f1-score'] * 100, 2),
-        "",
-        round(exec_time, 2)
+        round(best_exec_time, 2),
+        round(best_exec_time, 2),
+        ""
     ])
 
     max_iter = 50
-    clf = RidgeClassifier(max_iter=max_iter)
+    clf = SGDClassifier()
+    param_grid = {
+        'max_iter': [max_iter],
+        'random_state': [42],
+        'alpha': [0.00001, 0.0001, 0.001],
+        'l1_ratio': [0.0, 0.15, 0.40, 0.60, 0.85, 1.0]
+    }
+    grid_search = GridSearchCV(estimator=clf, param_grid=param_grid, scoring='accuracy')
     start_time = time.time()
-    clf.fit(x_train, y_train)
+    grid_search.fit(x_train, y_train)
     end_time = time.time()
     exec_time = end_time - start_time
-    RIC_tpred = clf.predict(x_train)
-    RIC_tacc = accuracy_score(y_train, RIC_tpred)
-    y_pred = clf.predict(x_test)
-    RICacc = accuracy_score(y_test, y_pred)
-    report = classification_report(y_test, y_pred, zero_division=0, output_dict=True)
-    print("------RidgeClassifier------")
-    print(f'Accuracy on the train set: {RIC_tacc:.4f}')
-    print(f'Accuracy on the test set: {RICacc:.4f}')
-    print(classification_report(y_test, y_pred, zero_division=0))
-    writer.writerow([
-        "Ridge", round(RIC_tacc * 100, 2), round(RICacc * 100, 2),
-        round(report['weighted avg']['precision'] * 100, 2),
-        round(report['weighted avg']['recall'] * 100, 2),
-        round(report['weighted avg']['f1-score'] * 100, 2),
-        max_iter,
-        round(exec_time, 2)
-    ])
-
-    max_iter = 50
-    clf = Lasso(max_iter=max_iter)
+    best_model = grid_search.best_estimator_
+    y_pred = best_model.predict(x_test)
     start_time = time.time()
-    clf.fit(x_train, y_train)
+    best_model.fit(x_train, y_train)
     end_time = time.time()
-    exec_time = end_time - start_time
-    LAS_tpred = clf.predict(x_train)
-    fpr, tpr, tresholds = roc_curve(y_train, LAS_tpred)
-    j_scores = tpr - fpr
-    optimal_idx = np.argmax(j_scores)
-    optimal_treshold = tresholds[optimal_idx]
-    y_pred = (LAS_tpred >= optimal_treshold).astype(int)
-    LAS_tacc = accuracy_score(y_train, y_pred)
-    LASpred = clf.predict(x_test)
-    fpr, tpr, tresholds = roc_curve(y_test, LASpred)
-    j_scores = tpr - fpr
-    optimal_idx = np.argmax(j_scores)
-    optimal_treshold = tresholds[optimal_idx]
-    y_pred = (LASpred >= optimal_treshold).astype(int)
-    LASacc = accuracy_score(y_test, y_pred)
-    report = classification_report(y_test, y_pred, zero_division=0, output_dict=True)
-    print("------Lasso------")
-    print(f'Accuracy on the train set: {LAS_tacc:.4f}')
-    print(f'Accuracy on the test set: {LASacc:.4f}')
-    print(classification_report(y_test, y_pred, zero_division=0))
-    writer.writerow([
-        "Lasso", round(LAS_tacc * 100, 2), round(LASacc * 100, 2),
-        round(report['weighted avg']['precision'] * 100, 2),
-        round(report['weighted avg']['recall'] * 100, 2),
-        round(report['weighted avg']['f1-score'] * 100, 2),
-        max_iter,
-        round(exec_time, 2)
-    ])
-
-    max_iter = 50
-    clf = ElasticNet(max_iter=max_iter)
-    start_time = time.time()
-    clf.fit(x_train, y_train)
-    end_time = time.time()
-    exec_time = end_time - start_time
-    ELN_tpred = clf.predict(x_train)
-    fpr, tpr, tresholds = roc_curve(y_train, ELN_tpred)
-    j_scores = tpr - fpr
-    optimal_idx = np.argmax(j_scores)
-    optimal_treshold = tresholds[optimal_idx]
-    y_pred = (ELN_tpred >= optimal_treshold).astype(int)
-    ELN_tacc = accuracy_score(y_train, y_pred)
-    ELNpred = clf.predict(x_test)
-    fpr, tpr, tresholds = roc_curve(y_test, ELNpred)
-    j_scores = tpr - fpr
-    optimal_idx = np.argmax(j_scores)
-    optimal_treshold = tresholds[optimal_idx]
-    y_pred = (ELNpred >= optimal_treshold).astype(int)
-    ELNacc = accuracy_score(y_test, y_pred)
-    report = classification_report(y_test, y_pred, zero_division=0, output_dict=True)
-    print("------ElasticNet------")
-    print(f'Accuracy on the train set: {ELN_tacc:.4f}')
-    print(f'Accuracy on the test set: {ELNacc:.4f}')
-    print(classification_report(y_test, y_pred, zero_division=0))
-    writer.writerow([
-        "ElasticNet", round(ELN_tacc * 100, 2), round(ELNacc * 100, 2),
-        round(report['weighted avg']['precision'] * 100, 2),
-        round(report['weighted avg']['recall'] * 100, 2),
-        round(report['weighted avg']['f1-score'] * 100, 2),
-        max_iter,
-        round(exec_time, 2)
-    ])
-
-    clf = OrthogonalMatchingPursuit()
-    start_time = time.time()
-    clf.fit(x_train, y_train)
-    end_time = time.time()
-    exec_time = end_time - start_time
-    OMP_tpred = clf.predict(x_train)
-    fpr, tpr, tresholds = roc_curve(y_train, OMP_tpred)
-    j_scores = tpr - fpr
-    optimal_idx = np.argmax(j_scores)
-    optimal_treshold = tresholds[optimal_idx]
-    y_pred = (OMP_tpred >= optimal_treshold).astype(int)
-    OMP_tacc = accuracy_score(y_train, y_pred)
-    OMPpred = clf.predict(x_test)
-    fpr, tpr, tresholds = roc_curve(y_test, OMPpred)
-    j_scores = tpr - fpr
-    optimal_idx = np.argmax(j_scores)
-    optimal_treshold = tresholds[optimal_idx]
-    y_pred = (OMPpred >= optimal_treshold).astype(int)
-    OMPacc = accuracy_score(y_test, y_pred)
-    report = classification_report(y_test, y_pred, zero_division=0, output_dict=True)
-    print("------OrthogonalMatchingPursuit------")
-    print(f'Accuracy on the train set: {OMP_tacc:.4f}')
-    print(f'Accuracy on the test set: {OMPacc:.4f}')
-    print(classification_report(y_test, y_pred, zero_division=0))
-    writer.writerow([
-        "OrthogonalMatchingPursuit", round(OMP_tacc * 100, 2), round(OMPacc * 100, 2),
-        round(report['weighted avg']['precision'] * 100, 2),
-        round(report['weighted avg']['recall'] * 100, 2),
-        round(report['weighted avg']['f1-score'] * 100, 2),
-        "",
-        round(exec_time, 2)
-    ])
-
-    max_iter = 50
-    clf = SGDClassifier(max_iter=max_iter)
-    start_time = time.time()
-    clf.fit(x_train, y_train)
-    end_time = time.time()
-    exec_time = end_time - start_time
-    SGC_tpred = clf.predict(x_train)
-    SGC_tacc = accuracy_score(y_train, SGC_tpred)
-    y_pred = clf.predict(x_test)
+    best_exec_time = end_time - start_time
     SGCacc = accuracy_score(y_test, y_pred)
-    report = classification_report(y_test, y_pred, output_dict=True)
-    print("------SGDClassifier------")
-    print(f'Accuracy on the train set: {SGC_tacc:.4f}')
+    cm = confusion_matrix(y_test, y_pred)
+    tn, fp, fn, tp = cm.ravel()
+    precision = tp / (tp + fp)
+    recall = tp / (tp + fn)
+    f1_score = 2 * ((precision * recall) / (precision + recall))
+    print("------StochasticGradientDescent------")
     print(f'Accuracy on the test set: {SGCacc:.4f}')
     print(classification_report(y_test, y_pred))
     writer.writerow([
-        "SGDClassifier", round(SGC_tacc * 100, 2), round(SGCacc * 100, 2),
-        round(report['weighted avg']['precision'] * 100, 2),
-        round(report['weighted avg']['recall'] * 100, 2),
-        round(report['weighted avg']['f1-score'] * 100, 2),
+        "StochasticGradientDescent", round(SGCacc * 100, 2),
+        round(precision, 2), round(recall, 2), round(f1_score, 2),
+        tn, fp, tp, fn,
         "",
-        round(exec_time, 2)
-    ])
-
-    clf = SGDRegressor(max_iter=max_iter)
-    start_time = time.time()
-    clf.fit(x_train, y_train)
-    end_time = time.time()
-    exec_time = end_time - start_time
-    SGR_tpred = clf.predict(x_train)
-    fpr, tpr, tresholds = roc_curve(y_train, SGR_tpred)
-    j_scores = tpr - fpr
-    optimal_idx = np.argmax(j_scores)
-    optimal_treshold = tresholds[optimal_idx]
-    y_pred = (SGR_tpred >= optimal_treshold).astype(int)
-    SGR_tacc = accuracy_score(y_train, y_pred)
-    SGRpred = clf.predict(x_test)
-    fpr, tpr, tresholds = roc_curve(y_test, SGRpred)
-    j_scores = tpr - fpr
-    optimal_idx = np.argmax(j_scores)
-    optimal_treshold = tresholds[optimal_idx]
-    y_pred = (SGRpred >= optimal_treshold).astype(int)
-    SGRacc = accuracy_score(y_test, y_pred)
-    report = classification_report(y_test, y_pred, output_dict=True)
-    print("------SGDRegressor------")
-    print(f'Accuracy on the train set: {SGR_tacc:.4f}')
-    print(f'Accuracy on the test set: {SGRacc:.4f}')
-    print(classification_report(y_test, y_pred))
-    writer.writerow([
-        "SGDRegressor", round(SGR_tacc * 100, 2), round(SGRacc * 100, 2),
-        round(report['weighted avg']['precision'] * 100, 2),
-        round(report['weighted avg']['recall'] * 100, 2),
-        round(report['weighted avg']['f1-score'] * 100, 2),
-        "",
-        round(exec_time, 2)
-    ])
-
-    clf = GaussianNB()
-    start_time = time.time()
-    clf.fit(x_train, y_train)
-    end_time = time.time()
-    exec_time = end_time - start_time
-    GNB_tpred = clf.predict(x_train)
-    GNB_tacc = accuracy_score(y_train, GNB_tpred)
-    y_pred = clf.predict(x_test)
-    GNBacc = accuracy_score(y_test, y_pred)
-    report = classification_report(y_test, y_pred, output_dict=True)
-    print("------GaussianNaiveBayes------")
-    print(f'Accuracy on the train set: {GNB_tacc:.4f}')
-    print(f'Accuracy on the test set: {GNBacc:.4f}')
-    print(classification_report(y_test, y_pred))
-    writer.writerow([
-        "GaussianNaiveBayes", round(GNB_tacc * 100, 2), round(GNBacc * 100, 2),
-        round(report['weighted avg']['precision'] * 100, 2),
-        round(report['weighted avg']['recall'] * 100, 2),
-        round(report['weighted avg']['f1-score'] * 100, 2),
-        "",
-        round(exec_time, 2)
-    ])
-
-    clf = ComplementNB()
-    start_time = time.time()
-    clf.fit(x_train, y_train)
-    end_time = time.time()
-    exec_time = end_time - start_time
-    CNB_tpred = clf.predict(x_train)
-    CNB_tacc = accuracy_score(y_train, CNB_tpred)
-    y_pred = clf.predict(x_test)
-    CNBacc = accuracy_score(y_test, y_pred)
-    report = classification_report(y_test, y_pred, output_dict=True)
-    print("------ComplementNaiveBayes------")
-    print(f'Accuracy on the train set: {CNB_tacc:.4f}')
-    print(f'Accuracy on the test set: {CNBacc:.4f}')
-    print(classification_report(y_test, y_pred))
-    writer.writerow([
-        "ComplementNaiveBayes", round(CNB_tacc * 100, 2), round(CNBacc * 100, 2),
-        round(report['weighted avg']['precision'] * 100, 2),
-        round(report['weighted avg']['recall'] * 100, 2),
-        round(report['weighted avg']['f1-score'] * 100, 2),
-        "",
-        round(exec_time, 2)
+        round(best_exec_time, 2),
+        round(exec_time, 2),
+        ""
     ])
 
     clf = CategoricalNB()
     start_time = time.time()
     clf.fit(x_train, y_train)
     end_time = time.time()
-    exec_time = end_time - start_time
-    CANB_tpred = clf.predict(x_train)
-    CANB_tacc = accuracy_score(y_train, CANB_tpred)
+    best_exec_time = end_time - start_time
     y_pred = clf.predict(x_test)
     CANBacc = accuracy_score(y_test, y_pred)
-    report = classification_report(y_test, y_pred, output_dict=True)
+    cm = confusion_matrix(y_test, y_pred)
+    tn, fp, fn, tp = cm.ravel()
+    precision = tp / (tp + fp)
+    recall = tp / (tp + fn)
+    f1_score = 2 * ((precision * recall) / (precision + recall))
     print("------CategoricalNaiveBayes------")
-    print(f'Accuracy on the train set: {CANB_tacc:.4f}')
     print(f'Accuracy on the test set: {CANBacc:.4f}')
     print(classification_report(y_test, y_pred))
     writer.writerow([
-        "CategoricalNaiveBayes", round(CANB_tacc * 100, 2), round(CANBacc * 100, 2),
-        round(report['weighted avg']['precision'] * 100, 2),
-        round(report['weighted avg']['recall'] * 100, 2),
-        round(report['weighted avg']['f1-score'] * 100, 2),
+        "CategoricalNaiveBayes", round(CANBacc * 100, 2),
+        round(precision, 2), round(recall, 2), round(f1_score, 2),
+        tn, fp, tp, fn,
         "",
-        round(exec_time, 2)
+        round(best_exec_time, 2),
+        round(best_exec_time, 2),
+        ""
     ])
 
-    clf = KNeighborsClassifier(n_neighbors=1, algorithm='kd_tree', n_jobs=-1)
+    clf = KNeighborsClassifier()
+    param_grid = {
+        'n_neighbors': [3, 5, 7],
+        'algorithm': ['kd_tree'],
+        'leaf_size': [20, 30, 40]
+    }
+    grid_search = GridSearchCV(estimator=clf, param_grid=param_grid, scoring='accuracy')
     start_time = time.time()
-    clf.fit(x_train, y_train)
+    grid_search.fit(x_train, y_train)
     end_time = time.time()
     exec_time = end_time - start_time
-    KNN_tpred = clf.predict(x_train)
-    KNN_tacc = accuracy_score(y_train, KNN_tpred)
-    y_pred = clf.predict(x_test)
+    best_model = grid_search.best_estimator_
+    y_pred = best_model.predict(x_test)
+    start_time = time.time()
+    best_model.fit(x_train, y_train)
+    end_time = time.time()
+    best_exec_time = end_time - start_time
     KNNacc = accuracy_score(y_test, y_pred)
-    report = classification_report(y_test, y_pred, output_dict=True)
-    print("------KNN------")
-    print(f'Accuracy on the train set: {KNN_tacc:.4f}')
+    cm = confusion_matrix(y_test, y_pred)
+    tn, fp, fn, tp = cm.ravel()
+    precision = tp / (tp + fp)
+    recall = tp / (tp + fn)
+    f1_score = 2 * ((precision * recall) / (precision + recall))
+    print("------KNeighbors------")
     print(f'Accuracy on the test set: {KNNacc:.4f}')
     print(classification_report(y_test, y_pred))
     writer.writerow([
-        "KNeighbors", round(KNN_tacc * 100, 2), round(KNNacc * 100, 2),
-        round(report['weighted avg']['precision'] * 100, 2),
-        round(report['weighted avg']['recall'] * 100, 2),
-        round(report['weighted avg']['f1-score'] * 100, 2),
+        "KNeighbors", round(KNNacc * 100, 2),
+        round(precision, 2), round(recall, 2), round(f1_score, 2),
+        tn, fp, tp, fn,
         "",
-        round(exec_time, 2)
+        round(best_exec_time, 2),
+        round(exec_time, 2),
+        ""
     ])
 
     clf = NearestCentroid()
     start_time = time.time()
     clf.fit(x_train, y_train)
     end_time = time.time()
-    exec_time = end_time - start_time
-    NEC_tpred = clf.predict(x_train)
-    NEC_tacc = accuracy_score(y_train, NEC_tpred)
+    best_exec_time = end_time - start_time
     y_pred = clf.predict(x_test)
     NECacc = accuracy_score(y_test, y_pred)
-    report = classification_report(y_test, y_pred, output_dict=True)
+    cm = confusion_matrix(y_test, y_pred)
+    tn, fp, fn, tp = cm.ravel()
+    precision = tp / (tp + fp)
+    recall = tp / (tp + fn)
+    f1_score = 2 * ((precision * recall) / (precision + recall))
     print("------NearestCentroid------")
-    print(f'Accuracy on the train set: {NEC_tacc:.4f}')
     print(f'Accuracy on the test set: {NECacc:.4f}')
     print(classification_report(y_test, y_pred))
     writer.writerow([
-        "NearestCentroid", round(NEC_tacc * 100, 2), round(NECacc * 100, 2),
-        round(report['weighted avg']['precision'] * 100, 2),
-        round(report['weighted avg']['recall'] * 100, 2),
-        round(report['weighted avg']['f1-score'] * 100, 2),
+        "NearestCentroid", round(NECacc * 100, 2),
+        round(precision, 2), round(recall, 2), round(f1_score, 2),
+        tn, fp, tp, fn,
         "",
-        round(exec_time, 2)
+        round(best_exec_time, 2),
+        round(best_exec_time, 2),
+        ""
     ])
 
     max_iter = 50
-    clf = svm.LinearSVC(max_iter=max_iter)
+    clf = svm.LinearSVC()
+    param_grid = {
+        'max_iter': [max_iter],
+        'random_state': [42],
+        'C': [0.5, 1.0, 2.0],
+    }
+    grid_search = GridSearchCV(estimator=clf, param_grid=param_grid, scoring='accuracy')
     start_time = time.time()
-    clf.fit(x_train, y_train)
+    grid_search.fit(x_train, y_train)
     end_time = time.time()
     exec_time = end_time - start_time
-    SVC_tpred = clf.predict(x_train)
-    SVC_tacc = accuracy_score(y_train, SVC_tpred)
-    y_pred = clf.predict(x_test)
+    best_model = grid_search.best_estimator_
+    y_pred = best_model.predict(x_test)
+    start_time = time.time()
+    best_model.fit(x_train, y_train)
+    end_time = time.time()
+    best_exec_time = end_time - start_time
     SVCacc = accuracy_score(y_test, y_pred)
-    report = classification_report(y_test, y_pred, output_dict=True)
-    print("------SVC------")
-    print(f'Accuracy on the train set: {SVC_tacc:.4f}')
+    cm = confusion_matrix(y_test, y_pred)
+    tn, fp, fn, tp = cm.ravel()
+    precision = tp / (tp + fp)
+    recall = tp / (tp + fn)
+    f1_score = 2 * ((precision * recall) / (precision + recall))
+    print("------LinearSVC------")
     print(f'Accuracy on the test set: {SVCacc:.4f}')
     print(classification_report(y_test, y_pred))
     writer.writerow([
-        "LinearSVC", round(SVC_tacc * 100, 2), round(SVCacc * 100, 2),
-        round(report['weighted avg']['precision'] * 100, 2),
-        round(report['weighted avg']['recall'] * 100, 2),
-        round(report['weighted avg']['f1-score'] * 100, 2),
+        "LinearSVC", round(SVCacc * 100, 2),
+        round(precision, 2), round(recall, 2), round(f1_score, 2),
+        tn, fp, tp, fn,
         max_iter,
-        round(exec_time, 2)
-    ])
-
-    max_iter = 100
-    clf = LogisticRegression(max_iter=max_iter, n_jobs=-1)
-    start_time = time.time()
-    clf.fit(x_train, y_train)
-    end_time = time.time()
-    exec_time = end_time - start_time
-    LGR_tpred = clf.predict(x_train)
-    LGR_tacc = accuracy_score(y_train, LGR_tpred)
-    y_pred = clf.predict(x_test)
-    LGRacc = accuracy_score(y_test, y_pred)
-    report = classification_report(y_test, y_pred, output_dict=True)
-    print("------LogisticRegression------")
-    print(f'Accuracy on the train set: {LGR_tacc:.4f}')
-    print(f'Accuracy on the test set: {LGRacc:.4f}')
-    print(classification_report(y_test, y_pred))
-    writer.writerow([
-        "LogisticRegression", round(LGR_tacc * 100, 2), round(LGRacc * 100, 2),
-        round(report['weighted avg']['precision'] * 100, 2),
-        round(report['weighted avg']['recall'] * 100, 2),
-        round(report['weighted avg']['f1-score'] * 100, 2),
-        max_iter,
-        round(exec_time, 2)
+        round(best_exec_time, 2),
+        round(exec_time, 2),
+        round(max_iter/best_exec_time, 4)
     ])
 
     clf = DecisionTreeClassifier()
+    param_grid = {
+        'random_state': [42],
+        'min_samples_split': [2, 3],
+        'min_samples_leaf': [1, 2, 3],
+        'min_impurity_decrease': [0.0, 0.1, 0.2],
+        'ccp_alpha': [0.0, 0.1, 0.2]
+    }
+    grid_search = GridSearchCV(estimator=clf, param_grid=param_grid, scoring='accuracy')
     start_time = time.time()
-    clf.fit(x_train, y_train)
+    grid_search.fit(x_train, y_train)
     end_time = time.time()
     exec_time = end_time - start_time
-    DTC_tpred = clf.predict(x_train)
-    DTC_tacc = accuracy_score(y_train, DTC_tpred)
-    y_pred = clf.predict(x_test)
+    best_model = grid_search.best_estimator_
+    y_pred = best_model.predict(x_test)
+    start_time = time.time()
+    best_model.fit(x_train, y_train)
+    end_time = time.time()
+    best_exec_time = end_time - start_time
     DTCacc = accuracy_score(y_test, y_pred)
-    report = classification_report(y_test, y_pred, output_dict=True)
+    cm = confusion_matrix(y_test, y_pred)
+    tn, fp, fn, tp = cm.ravel()
+    precision = tp / (tp + fp)
+    recall = tp / (tp + fn)
+    f1_score = 2 * ((precision * recall) / (precision + recall))
     print("------DecisionTree------")
-    print(f'Accuracy on the train set: {DTC_tacc:.4f}')
     print(f'Accuracy on the test set: {DTCacc:.4f}')
     print(classification_report(y_test, y_pred))
     writer.writerow([
-        "DecisionTree", round(DTC_tacc * 100, 2), round(DTCacc * 100, 2),
-        round(report['weighted avg']['precision'] * 100, 2),
-        round(report['weighted avg']['recall'] * 100, 2),
-        round(report['weighted avg']['f1-score'] * 100, 2),
+        "DecisionTree", round(DTCacc * 100, 2),
+        round(precision, 2), round(recall, 2), round(f1_score, 2),
+        tn, fp, tp, fn,
         "",
-        round(exec_time, 2)
+        round(best_exec_time, 2),
+        round(exec_time, 2),
+        ""
     ])
 
     n_estimators = 100
-    clf = RandomForestClassifier(n_estimators=n_estimators)
+    clf = RandomForestClassifier()
+    param_grid = {
+        'n_estimators': [n_estimators],
+        'random_state': [42],
+        'min_samples_split': [2, 3],
+        'min_samples_leaf': [1, 2],
+        'min_impurity_decrease': [0.0, 0.1],
+        'ccp_alpha': [0.0, 0.1]
+    }
+    grid_search = GridSearchCV(estimator=clf, param_grid=param_grid, scoring='accuracy')
     start_time = time.time()
-    clf.fit(x_train, y_train)
+    grid_search.fit(x_train, y_train)
     end_time = time.time()
     exec_time = end_time - start_time
-    RFC_tpred = clf.predict(x_train)
-    RFC_tacc = accuracy_score(y_train, RFC_tpred)
-    y_pred = clf.predict(x_test)
+    best_model = grid_search.best_estimator_
+    y_pred = best_model.predict(x_test)
+    start_time = time.time()
+    best_model.fit(x_train, y_train)
+    end_time = time.time()
+    best_exec_time = end_time - start_time
     RFCacc = accuracy_score(y_test, y_pred)
-    report = classification_report(y_test, y_pred, output_dict=True)
-    print("------RandomForestClassifier------")
-    print(f'Accuracy on the train set: {RFC_tacc:.4f}')
+    cm = confusion_matrix(y_test, y_pred)
+    tn, fp, fn, tp = cm.ravel()
+    precision = tp / (tp + fp)
+    recall = tp / (tp + fn)
+    f1_score = 2 * ((precision * recall) / (precision + recall))
+    print("------RandomForest------")
     print(f'Accuracy on the test set: {RFCacc:.4f}')
     print(classification_report(y_test, y_pred))
     writer.writerow([
-        "RandomForestClassifier", round(RFC_tacc * 100, 2), round(RFCacc * 100, 2),
-        round(report['weighted avg']['precision'] * 100, 2),
-        round(report['weighted avg']['recall'] * 100, 2),
-        round(report['weighted avg']['f1-score'] * 100, 2),
+        "RandomForest", round(RFCacc * 100, 2),
+        round(precision, 2), round(recall, 2), round(f1_score, 2),
+        tn, fp, tp, fn,
         n_estimators,
-        round(exec_time, 2)
-    ])
-
-    clf = RandomForestRegressor(n_estimators=n_estimators)
-    start_time = time.time()
-    clf.fit(x_train, y_train)
-    end_time = time.time()
-    exec_time = end_time - start_time
-    RFR_tpred = clf.predict(x_train)
-    fpr, tpr, tresholds = roc_curve(y_train, RFR_tpred)
-    j_scores = tpr - fpr
-    optimal_idx = np.argmax(j_scores)
-    optimal_treshold = tresholds[optimal_idx]
-    y_pred = (RFR_tpred >= optimal_treshold).astype(int)
-    RFR_tacc = accuracy_score(y_train, y_pred)
-    RFRpred = clf.predict(x_test)
-    fpr, tpr, tresholds = roc_curve(y_test, RFRpred)
-    j_scores = tpr - fpr
-    optimal_idx = np.argmax(j_scores)
-    optimal_treshold = tresholds[optimal_idx]
-    y_pred = (RFRpred >= optimal_treshold).astype(int)
-    RFRacc = accuracy_score(y_test, y_pred)
-    report = classification_report(y_test, y_pred, output_dict=True)
-    print("------RandomForestRegressor------")
-    print(f'Accuracy on the train set: {RFR_tacc:.4f}')
-    print(f'Accuracy on the test set: {RFRacc:.4f}')
-    print(classification_report(y_test, y_pred))
-    writer.writerow([
-        "RandomForestRegressor", round(RFR_tacc * 100, 2), round(RFRacc * 100, 2),
-        round(report['weighted avg']['precision'] * 100, 2),
-        round(report['weighted avg']['recall'] * 100, 2),
-        round(report['weighted avg']['f1-score'] * 100, 2),
-        n_estimators,
-        round(exec_time, 2)
+        round(best_exec_time, 2),
+        round(exec_time, 2),
+        round(n_estimators/best_exec_time, 4)
     ])
 
     n_estimators = 50
-    clf = ExtraTreesClassifier(n_estimators=n_estimators)
+    clf = ExtraTreesClassifier()
+    param_grid = {
+        'n_estimators': [n_estimators],
+        'random_state': [42],
+        'min_samples_split': [2, 3],
+        'min_samples_leaf': [1, 2],
+        'min_impurity_decrease': [0.0, 0.1],
+        'ccp_alpha': [0.0, 0.1]
+    }
+    grid_search = GridSearchCV(estimator=clf, param_grid=param_grid, scoring='accuracy')
     start_time = time.time()
-    clf.fit(x_train, y_train)
+    grid_search.fit(x_train, y_train)
     end_time = time.time()
     exec_time = end_time - start_time
-    ET_tpred = clf.predict(x_train)
-    ET_tacc = accuracy_score(y_train, ET_tpred)
-    y_pred = clf.predict(x_test)
+    best_model = grid_search.best_estimator_
+    y_pred = best_model.predict(x_test)
+    start_time = time.time()
+    best_model.fit(x_train, y_train)
+    end_time = time.time()
+    best_exec_time = end_time - start_time
     ETacc = accuracy_score(y_test, y_pred)
-    report = classification_report(y_test, y_pred, output_dict=True)
+    cm = confusion_matrix(y_test, y_pred)
+    tn, fp, fn, tp = cm.ravel()
+    precision = tp / (tp + fp)
+    recall = tp / (tp + fn)
+    f1_score = 2 * ((precision * recall) / (precision + recall))
     print("------ExtraTrees------")
-    print(f'Accuracy on the train set: {ET_tacc:.4f}')
     print(f'Accuracy on the test set: {ETacc:.4f}')
     print(classification_report(y_test, y_pred))
     writer.writerow([
-        "ExtraTreesClassifier", round(ET_tacc * 100, 2), round(ETacc * 100, 2),
-        round(report['weighted avg']['precision'] * 100, 2),
-        round(report['weighted avg']['recall'] * 100, 2),
-        round(report['weighted avg']['f1-score'] * 100, 2),
+        "ExtraTrees", round(ETacc * 100, 2),
+        round(precision, 2), round(recall, 2), round(f1_score, 2),
+        tn, fp, tp, fn,
         n_estimators,
-        round(exec_time, 2)
-    ])
-
-    clf = ExtraTreesRegressor(n_estimators=n_estimators)
-    start_time = time.time()
-    clf.fit(x_train, y_train)
-    end_time = time.time()
-    exec_time = end_time - start_time
-    ETR_tpred = clf.predict(x_train)
-    fpr, tpr, tresholds = roc_curve(y_train, ETR_tpred)
-    j_scores = tpr - fpr
-    optimal_idx = np.argmax(j_scores)
-    optimal_treshold = tresholds[optimal_idx]
-    y_pred = (ETR_tpred >= optimal_treshold).astype(int)
-    ETR_tacc = accuracy_score(y_train, y_pred)
-    ETRpred = clf.predict(x_test)
-    fpr, tpr, tresholds = roc_curve(y_test, ETRpred)
-    j_scores = tpr - fpr
-    optimal_idx = np.argmax(j_scores)
-    optimal_treshold = tresholds[optimal_idx]
-    y_pred = (ETRpred >= optimal_treshold).astype(int)
-    ETRacc = accuracy_score(y_test, y_pred)
-    report = classification_report(y_test, y_pred, output_dict=True)
-    print("------ExtraTreesRegressor------")
-    print(f'Accuracy on the train set: {ETR_tacc:.4f}')
-    print(f'Accuracy on the test set: {ETRacc:.4f}')
-    print(classification_report(y_test, y_pred))
-    writer.writerow([
-        "ExtraTreesRegressor", round(ETR_tacc * 100, 2), round(ETRacc * 100, 2),
-        round(report['weighted avg']['precision'] * 100, 2),
-        round(report['weighted avg']['recall'] * 100, 2),
-        round(report['weighted avg']['f1-score'] * 100, 2),
-        n_estimators,
-        round(exec_time, 2)
+        round(best_exec_time, 2),
+        round(exec_time, 2),
+        round(n_estimators/best_exec_time, 4)
     ])
 
     max_iter = 125
-    clf = MLPClassifier(max_iter=max_iter)
+    clf = MLPClassifier()
+    param_grid = {
+        'max_iter': [max_iter],
+        'random_state': [42],
+        'hidden_layer_sizes': [50, 100, 200],
+        'alpha': [0.00001, 0.0001, 0.001],
+        'learning_rate_init': [0.0001, 0.001]
+    }
+    grid_search = GridSearchCV(estimator=clf, param_grid=param_grid, scoring='accuracy')
     start_time = time.time()
-    clf.fit(x_train, y_train)
+    grid_search.fit(x_train, y_train)
     end_time = time.time()
     exec_time = end_time - start_time
-    MLC_tpred = clf.predict(x_train)
-    MLC_tacc = accuracy_score(y_train, MLC_tpred)
-    y_pred = clf.predict(x_test)
+    best_model = grid_search.best_estimator_
+    y_pred = best_model.predict(x_test)
+    start_time = time.time()
+    best_model.fit(x_train, y_train)
+    end_time = time.time()
+    best_exec_time = end_time - start_time
     MLCacc = accuracy_score(y_test, y_pred)
-    report = classification_report(y_test, y_pred, output_dict=True)
-    print("------MLPClassifier------")
-    print(f'Accuracy on the train set: {MLC_tacc:.4f}')
+    cm = confusion_matrix(y_test, y_pred)
+    tn, fp, fn, tp = cm.ravel()
+    precision = tp / (tp + fp)
+    recall = tp / (tp + fn)
+    f1_score = 2 * ((precision * recall) / (precision + recall))
+    print("------MultiLayerPerceptron------")
     print(f'Accuracy on the test set: {MLCacc:.4f}')
     print(classification_report(y_test, y_pred))
     writer.writerow([
-        "MLPClassifier", round(MLC_tacc * 100, 2), round(MLCacc * 100, 2),
-        round(report['weighted avg']['precision'] * 100, 2),
-        round(report['weighted avg']['recall'] * 100, 2),
-        round(report['weighted avg']['f1-score'] * 100, 2),
+        "MultiLayerPerceptron", round(MLCacc * 100, 2),
+        round(precision, 2), round(recall, 2), round(f1_score, 2),
+        tn, fp, tp, fn,
         max_iter,
-        round(exec_time, 2)
-    ])
-
-    clf = MLPRegressor(max_iter=max_iter)
-    start_time = time.time()
-    clf.fit(x_train, y_train)
-    end_time = time.time()
-    exec_time = end_time - start_time
-    MLR_tpred = clf.predict(x_train)
-    fpr, tpr, tresholds = roc_curve(y_train, MLR_tpred)
-    j_scores = tpr - fpr
-    optimal_idx = np.argmax(j_scores)
-    optimal_treshold = tresholds[optimal_idx]
-    y_pred = (MLR_tpred >= optimal_treshold).astype(int)
-    MLR_tacc = accuracy_score(y_train, y_pred)
-    MLRpred = clf.predict(x_test)
-    fpr, tpr, tresholds = roc_curve(y_test, MLRpred)
-    j_scores = tpr - fpr
-    optimal_idx = np.argmax(j_scores)
-    optimal_treshold = tresholds[optimal_idx]
-    y_pred = (MLRpred >= optimal_treshold).astype(int)
-    MLRacc = accuracy_score(y_test, y_pred)
-    report = classification_report(y_test, y_pred, output_dict=True)
-    print("------MLPRegressor------")
-    print(f'Accuracy on the train set: {MLR_tacc:.4f}')
-    print(f'Accuracy on the test set: {MLRacc:.4f}')
-    print(classification_report(y_test, y_pred))
-    writer.writerow([
-        "MLPRegressor", round(MLR_tacc * 100, 2), round(MLRacc * 100, 2),
-        round(report['weighted avg']['precision'] * 100, 2),
-        round(report['weighted avg']['recall'] * 100, 2),
-        round(report['weighted avg']['f1-score'] * 100, 2),
-        max_iter,
-        round(exec_time, 2)
+        round(best_exec_time, 2),
+        round(exec_time, 2),
+        round(max_iter/best_exec_time, 4)
     ])
 
     n_estimators = 750
-    clf = GradientBoostingClassifier(n_estimators=n_estimators)
+    clf = GradientBoostingClassifier()
+    param_grid = {
+        'n_estimators': [n_estimators],
+        'random_state': [42],
+        'learning_rate': [0.01, 0.1],
+        'min_samples_split': [2, 3],
+        'min_samples_leaf': [1, 2],
+        'min_impurity_decrease': [0.0, 0.1],
+    }
+    grid_search = GridSearchCV(estimator=clf, param_grid=param_grid, scoring='accuracy')
     start_time = time.time()
-    clf.fit(x_train, y_train)
+    grid_search.fit(x_train, y_train)
     end_time = time.time()
     exec_time = end_time - start_time
-    GBC_tpred = clf.predict(x_train)
-    GBC_tacc = accuracy_score(y_train, GBC_tpred)
-    y_pred = clf.predict(x_test)
+    best_model = grid_search.best_estimator_
+    y_pred = best_model.predict(x_test)
+    start_time = time.time()
+    best_model.fit(x_train, y_train)
+    end_time = time.time()
+    best_exec_time = end_time - start_time
     GBCacc = accuracy_score(y_test, y_pred)
-    report = classification_report(y_test, y_pred, output_dict=True)
-    print("------GradientBoostingClassifier------")
-    print(f'Accuracy on the train set: {GBC_tacc:.4f}')
+    cm = confusion_matrix(y_test, y_pred)
+    tn, fp, fn, tp = cm.ravel()
+    precision = tp / (tp + fp)
+    recall = tp / (tp + fn)
+    f1_score = 2 * ((precision * recall) / (precision + recall))
+    print("------GradientBoosting------")
     print(f'Accuracy on the test set: {GBCacc:.4f}')
     print(classification_report(y_test, y_pred))
     writer.writerow([
-        "GradientBoostingClassifier", round(GBC_tacc * 100, 2), round(GBCacc * 100, 2),
-        round(report['weighted avg']['precision'] * 100, 2),
-        round(report['weighted avg']['recall'] * 100, 2),
-        round(report['weighted avg']['f1-score'] * 100, 2),
+        "GradientBoosting", round(GBCacc * 100, 2),
+        round(precision, 2), round(recall, 2), round(f1_score, 2),
+        tn, fp, tp, fn,
         n_estimators,
-        round(exec_time, 2)
-    ])
-
-    clf = GradientBoostingRegressor(n_estimators=n_estimators)
-    start_time = time.time()
-    clf.fit(x_train, y_train)
-    end_time = time.time()
-    exec_time = end_time - start_time
-    GBR_tpred = clf.predict(x_train)
-    fpr, tpr, tresholds = roc_curve(y_train, GBR_tpred)
-    j_scores = tpr - fpr
-    optimal_idx = np.argmax(j_scores)
-    optimal_treshold = tresholds[optimal_idx]
-    y_pred = (GBR_tpred >= optimal_treshold).astype(int)
-    GBR_tacc = accuracy_score(y_train, y_pred)
-    GBRpred = clf.predict(x_test)
-    fpr, tpr, tresholds = roc_curve(y_test, GBRpred)
-    j_scores = tpr - fpr
-    optimal_idx = np.argmax(j_scores)
-    optimal_treshold = tresholds[optimal_idx]
-    y_pred = (GBRpred >= optimal_treshold).astype(int)
-    GBRacc = accuracy_score(y_test, y_pred)
-    report = classification_report(y_test, y_pred, output_dict=True)
-    print("------GradientBoostingRegressor------")
-    print(f'Accuracy on the train set: {GBR_tacc:.4f}')
-    print(f'Accuracy on the test set: {GBRacc:.4f}')
-    print(classification_report(y_test, y_pred))
-    writer.writerow([
-        "GradientBoostingRegressor", round(GBR_tacc * 100, 2), round(GBRacc * 100, 2),
-        round(report['weighted avg']['precision'] * 100, 2),
-        round(report['weighted avg']['recall'] * 100, 2),
-        round(report['weighted avg']['f1-score'] * 100, 2),
-        n_estimators,
-        round(exec_time, 2)
+        round(best_exec_time, 2),
+        round(exec_time, 2),
+        round(n_estimators/best_exec_time, 4)
     ])
 
     max_iter = 400
-    clf = HistGradientBoostingClassifier(max_iter=max_iter)
+    clf = HistGradientBoostingClassifier()
+    param_grid = {
+        'max_iter': [max_iter],
+        'random_state': [42],
+        'learning_rate': [0.01, 0.1],
+        'max_leaf_nodes': [21, 31, 41],
+        'min_samples_leaf': [10, 20, 30],
+        'max_bins': [50, 150, 255],
+    }
+    grid_search = GridSearchCV(estimator=clf, param_grid=param_grid, scoring='accuracy')
     start_time = time.time()
-    clf.fit(x_train, y_train)
+    grid_search.fit(x_train, y_train)
     end_time = time.time()
     exec_time = end_time - start_time
-    HGBC_tpred = clf.predict(x_train)
-    HGBC_tacc = accuracy_score(y_train, HGBC_tpred)
-    y_pred = clf.predict(x_test)
+    best_model = grid_search.best_estimator_
+    y_pred = best_model.predict(x_test)
+    start_time = time.time()
+    best_model.fit(x_train, y_train)
+    end_time = time.time()
+    best_exec_time = end_time - start_time
     HGBCacc = accuracy_score(y_test, y_pred)
-    report = classification_report(y_test, y_pred, output_dict=True)
-    print("------HistGradientBoostingClassifier------")
-    print(f'Accuracy on the train set: {HGBC_tacc:.4f}')
+    cm = confusion_matrix(y_test, y_pred)
+    tn, fp, fn, tp = cm.ravel()
+    precision = tp / (tp + fp)
+    recall = tp / (tp + fn)
+    f1_score = 2 * ((precision * recall) / (precision + recall))
+    print("------HistGradientBoosting------")
     print(f'Accuracy on the test set: {HGBCacc:.4f}')
     print(classification_report(y_test, y_pred))
     writer.writerow([
-        "HistGradientBoostingClassifier", round(HGBC_tacc * 100, 2), round(HGBCacc * 100, 2),
-        round(report['weighted avg']['precision'] * 100, 2),
-        round(report['weighted avg']['recall'] * 100, 2),
-        round(report['weighted avg']['f1-score'] * 100, 2),
+        "HistGradientBoosting", round(HGBCacc * 100, 2),
+        round(precision, 2), round(recall, 2), round(f1_score, 2),
+        tn, fp, tp, fn,
         max_iter,
-        round(exec_time, 2)
-    ])
-
-    clf = HistGradientBoostingRegressor(max_iter=max_iter)
-    start_time = time.time()
-    clf.fit(x_train, y_train)
-    end_time = time.time()
-    exec_time = end_time - start_time
-    HGBR_tpred = clf.predict(x_train)
-    fpr, tpr, tresholds = roc_curve(y_train, HGBR_tpred)
-    j_scores = tpr - fpr
-    optimal_idx = np.argmax(j_scores)
-    optimal_treshold = tresholds[optimal_idx]
-    y_pred = (HGBR_tpred >= optimal_treshold).astype(int)
-    HGBR_tacc = accuracy_score(y_train, y_pred)
-    HGBRpred = clf.predict(x_test)
-    fpr, tpr, tresholds = roc_curve(y_test, HGBRpred)
-    j_scores = tpr - fpr
-    optimal_idx = np.argmax(j_scores)
-    optimal_treshold = tresholds[optimal_idx]
-    y_pred = (HGBRpred >= optimal_treshold).astype(int)
-    HGBRacc = accuracy_score(y_test, y_pred)
-    report = classification_report(y_test, y_pred, output_dict=True)
-    print("------HistGradientBoostingRegressor------")
-    print(f'Accuracy on the train set: {HGBR_tacc:.4f}')
-    print(f'Accuracy on the test set: {HGBRacc:.4f}')
-    print(classification_report(y_test, y_pred))
-    writer.writerow([
-        "HistGradientBoostingRegressor", round(HGBR_tacc * 100, 2), round(HGBRacc * 100, 2),
-        round(report['weighted avg']['precision'] * 100, 2),
-        round(report['weighted avg']['recall'] * 100, 2),
-        round(report['weighted avg']['f1-score'] * 100, 2),
-        max_iter,
-        round(exec_time, 2)
+        round(best_exec_time, 2),
+        round(exec_time, 2),
+        round(max_iter/best_exec_time, 4)
     ])
 
     n_estimators = 500
-    clf = AdaBoostClassifier(n_estimators=n_estimators)
+    clf = AdaBoostClassifier()
+    param_grid = {
+        'n_estimators': [n_estimators],
+        'random_state': [42],
+        'learning_rate': [0.1, 1.0, 10.0],
+    }
+    grid_search = GridSearchCV(estimator=clf, param_grid=param_grid, scoring='accuracy')
     start_time = time.time()
-    clf.fit(x_train, y_train)
+    grid_search.fit(x_train, y_train)
     end_time = time.time()
     exec_time = end_time - start_time
-    ADAC_tpred = clf.predict(x_train)
-    ADAC_tacc = accuracy_score(y_train, ADAC_tpred)
-    y_pred = clf.predict(x_test)
+    best_model = grid_search.best_estimator_
+    y_pred = best_model.predict(x_test)
+    start_time = time.time()
+    best_model.fit(x_train, y_train)
+    end_time = time.time()
+    best_exec_time = end_time - start_time
     ADACacc = accuracy_score(y_test, y_pred)
-    report = classification_report(y_test, y_pred, output_dict=True)
-    print("------AdaBoostClassifier------")
-    print(f'Accuracy on the train set: {ADAC_tacc:.4f}')
+    cm = confusion_matrix(y_test, y_pred)
+    tn, fp, fn, tp = cm.ravel()
+    precision = tp / (tp + fp)
+    recall = tp / (tp + fn)
+    f1_score = 2 * ((precision * recall) / (precision + recall))
+    print("------AdaBoost------")
     print(f'Accuracy on the test set: {ADACacc:.4f}')
     print(classification_report(y_test, y_pred))
     writer.writerow([
-        "AdaBoostClassifier", round(ADAC_tacc * 100, 2), round(ADACacc * 100, 2),
-        round(report['weighted avg']['precision'] * 100, 2),
-        round(report['weighted avg']['recall'] * 100, 2),
-        round(report['weighted avg']['f1-score'] * 100, 2),
+        "AdaBoost", round(ADACacc * 100, 2),
+        round(precision, 2), round(recall, 2), round(f1_score, 2),
+        tn, fp, tp, fn,
         n_estimators,
-        round(exec_time, 2)
-    ])
-
-    clf = AdaBoostRegressor(n_estimators=n_estimators)
-    start_time = time.time()
-    clf.fit(x_train, y_train)
-    end_time = time.time()
-    exec_time = end_time - start_time
-    ADAR_tpred = clf.predict(x_train)
-    fpr, tpr, tresholds = roc_curve(y_train, ADAR_tpred)
-    j_scores = tpr - fpr
-    optimal_idx = np.argmax(j_scores)
-    optimal_treshold = tresholds[optimal_idx]
-    y_pred = (ADAR_tpred >= optimal_treshold).astype(int)
-    ADAR_tacc = accuracy_score(y_train, y_pred)
-    ADARpred = clf.predict(x_test)
-    fpr, tpr, tresholds = roc_curve(y_test, ADARpred)
-    j_scores = tpr - fpr
-    optimal_idx = np.argmax(j_scores)
-    optimal_treshold = tresholds[optimal_idx]
-    y_pred = (ADARpred >= optimal_treshold).astype(int)
-    ADARacc = accuracy_score(y_test, y_pred)
-    report = classification_report(y_test, y_pred, output_dict=True)
-    print("------AdaBoostRegressor------")
-    print(f'Accuracy on the train set: {ADAR_tacc:.4f}')
-    print(f'Accuracy on the test set: {ADARacc:.4f}')
-    print(classification_report(y_test, y_pred))
-    writer.writerow([
-        "AdaBoostRegressor", round(ADAR_tacc * 100, 2), round(ADARacc * 100, 2),
-        round(report['weighted avg']['precision'] * 100, 2),
-        round(report['weighted avg']['recall'] * 100, 2),
-        round(report['weighted avg']['f1-score'] * 100, 2),
-        n_estimators,
-        round(exec_time, 2)
+        round(best_exec_time, 2),
+        round(exec_time, 2),
+        round(n_estimators/best_exec_time, 4)
     ])
 
     n_estimators = 350
-    clf = XGBClassifier(n_estimators=n_estimators)
+    clf = XGBClassifier()
+    param_grid = {
+        'n_estimators': [n_estimators],
+        'random_state': [42],
+        'max_depth': [3, 6, 9],
+        'max_bin': [128, 256, 512],
+        'learning_rate': [0.1, 0.3, 0.5]
+    }
+    grid_search = GridSearchCV(estimator=clf, param_grid=param_grid, scoring='accuracy')
     start_time = time.time()
-    clf.fit(x_train, y_train)
+    grid_search.fit(x_train, y_train)
     end_time = time.time()
     exec_time = end_time - start_time
-    XGB_tpred = clf.predict(x_train)
-    XGB_tacc = accuracy_score(y_train, XGB_tpred)
-    y_pred = clf.predict(x_test)
+    best_model = grid_search.best_estimator_
+    y_pred = best_model.predict(x_test)
+    start_time = time.time()
+    best_model.fit(x_train, y_train)
+    end_time = time.time()
+    best_exec_time = end_time - start_time
     XGBacc = accuracy_score(y_test, y_pred)
-    report = classification_report(y_test, y_pred, output_dict=True)
+    cm = confusion_matrix(y_test, y_pred)
+    tn, fp, fn, tp = cm.ravel()
+    precision = tp / (tp + fp)
+    recall = tp / (tp + fn)
+    f1_score = 2 * ((precision * recall) / (precision + recall))
     print("------XGBoost------")
-    print(f'Accuracy on the train set: {XGB_tacc:.4f}')
     print(f'Accuracy on the test set: {XGBacc:.4f}')
     print(classification_report(y_test, y_pred))
     writer.writerow([
-        "XGBoostClassifier", round(XGB_tacc * 100, 2), round(XGBacc * 100, 2),
-        round(report['weighted avg']['precision'] * 100, 2),
-        round(report['weighted avg']['recall'] * 100, 2),
-        round(report['weighted avg']['f1-score'] * 100, 2),
+        "XGBoost", round(XGBacc * 100, 2),
+        round(precision, 2), round(recall, 2), round(f1_score, 2),
+        tn, fp, tp, fn,
         n_estimators,
-        round(exec_time, 2)
-    ])
-
-    clf = XGBRegressor(n_estimators=n_estimators)
-    start_time = time.time()
-    clf.fit(x_train, y_train)
-    end_time = time.time()
-    exec_time = end_time - start_time
-    XBR_tpred = clf.predict(x_train)
-    fpr, tpr, tresholds = roc_curve(y_train, XBR_tpred)
-    j_scores = tpr - fpr
-    optimal_idx = np.argmax(j_scores)
-    optimal_treshold = tresholds[optimal_idx]
-    y_pred = (XBR_tpred >= optimal_treshold).astype(int)
-    XBR_tacc = accuracy_score(y_train, y_pred)
-    XBRpred = clf.predict(x_test)
-    fpr, tpr, tresholds = roc_curve(y_test, XBRpred)
-    j_scores = tpr - fpr
-    optimal_idx = np.argmax(j_scores)
-    optimal_treshold = tresholds[optimal_idx]
-    y_pred = (XBRpred >= optimal_treshold).astype(int)
-    XBRacc = accuracy_score(y_test, y_pred)
-    report = classification_report(y_test, y_pred, output_dict=True)
-    print("------XGBoostRegressor------")
-    print(f'Accuracy on the train set: {XBR_tacc:.4f}')
-    print(f'Accuracy on the test set: {XBRacc:.4f}')
-    print(classification_report(y_test, y_pred))
-    writer.writerow([
-        "XGBoostRegressor", round(XBR_tacc * 100, 2), round(XBRacc * 100, 2),
-        round(report['weighted avg']['precision'] * 100, 2),
-        round(report['weighted avg']['recall'] * 100, 2),
-        round(report['weighted avg']['f1-score'] * 100, 2),
-        n_estimators,
-        round(exec_time, 2)
+        round(best_exec_time, 2),
+        round(exec_time, 2),
+        round(n_estimators/best_exec_time, 4)
     ])
 
     n_estimators = 700
-    clf = LGBMClassifier(n_estimators=n_estimators)
+    clf = LGBMClassifier()
+    param_grid = {
+        'n_estimators': [n_estimators],
+        'random_state': [42],
+        'num_leaves': [21, 31, 41],
+        'learning_rate': [0.01, 0.1, 1.0],
+        'min_child_samples': [10, 20, 30]
+    }
+    grid_search = GridSearchCV(estimator=clf, param_grid=param_grid, scoring='accuracy')
     start_time = time.time()
-    clf.fit(x_train, y_train)
+    grid_search.fit(x_train, y_train)
     end_time = time.time()
     exec_time = end_time - start_time
-    LGC_tpred = clf.predict(x_train)
-    LGC_tacc = accuracy_score(y_train, LGC_tpred)
-    y_pred = clf.predict(x_test)
+    best_model = grid_search.best_estimator_
+    y_pred = best_model.predict(x_test)
+    start_time = time.time()
+    best_model.fit(x_train, y_train)
+    end_time = time.time()
+    best_exec_time = end_time - start_time
     LGCacc = accuracy_score(y_test, y_pred)
-    report = classification_report(y_test, y_pred, output_dict=True)
-    print("------LightGBMClassifier------")
-    print(f'Accuracy on the train set: {LGC_tacc:.4f}')
+    cm = confusion_matrix(y_test, y_pred)
+    tn, fp, fn, tp = cm.ravel()
+    precision = tp / (tp + fp)
+    recall = tp / (tp + fn)
+    f1_score = 2 * ((precision * recall) / (precision + recall))
+    print("------LightGBM------")
     print(f'Accuracy on the test set: {LGCacc:.4f}')
     print(classification_report(y_test, y_pred))
     writer.writerow([
-        "LightGBMClassifier", round(LGC_tacc * 100, 2), round(LGCacc * 100, 2),
-        round(report['weighted avg']['precision'] * 100, 2),
-        round(report['weighted avg']['recall'] * 100, 2),
-        round(report['weighted avg']['f1-score'] * 100, 2),
+        "LightGBM", round(LGCacc * 100, 2),
+        round(precision, 2), round(recall, 2), round(f1_score, 2),
+        tn, fp, tp, fn,
         n_estimators,
-        round(exec_time, 2)
-    ])
-
-    clf = LGBMRegressor(n_estimators=n_estimators)
-    start_time = time.time()
-    clf.fit(x_train, y_train)
-    end_time = time.time()
-    exec_time = end_time - start_time
-    LGBR_tpred = clf.predict(x_train)
-    fpr, tpr, tresholds = roc_curve(y_train, LGBR_tpred)
-    j_scores = tpr - fpr
-    optimal_idx = np.argmax(j_scores)
-    optimal_treshold = tresholds[optimal_idx]
-    y_pred = (LGBR_tpred >= optimal_treshold).astype(int)
-    LGBR_tacc = accuracy_score(y_train, y_pred)
-    LGBRpred = clf.predict(x_test)
-    fpr, tpr, tresholds = roc_curve(y_test, LGBRpred)
-    j_scores = tpr - fpr
-    optimal_idx = np.argmax(j_scores)
-    optimal_treshold = tresholds[optimal_idx]
-    y_pred = (LGBRpred >= optimal_treshold).astype(int)
-    LGBRacc = accuracy_score(y_test, y_pred)
-    report = classification_report(y_test, y_pred, output_dict=True)
-    print("------LightGBMRegressor------")
-    print(f'Accuracy on the train set: {LGBR_tacc:.4f}')
-    print(f'Accuracy on the test set: {LGBRacc:.4f}')
-    print(classification_report(y_test, y_pred))
-    writer.writerow([
-        "LightGBMRegressor", round(LGBR_tacc * 100, 2), round(LGBRacc * 100, 2),
-        round(report['weighted avg']['precision'] * 100, 2),
-        round(report['weighted avg']['recall'] * 100, 2),
-        round(report['weighted avg']['f1-score'] * 100, 2),
-        n_estimators,
-        round(exec_time, 2)
+        round(best_exec_time, 2),
+        round(exec_time, 2),
+        round(n_estimators/best_exec_time, 4)
     ])
 
     n_estimators = 250
-    clf = CatBoostClassifier(n_estimators=n_estimators)
+    clf = CatBoostClassifier()
+    param_grid = {
+        'n_estimators': [n_estimators],
+        'random_state': [42],
+        'learning_rate': [0.01, 0.03],
+        'depth': [4, 6, 8],
+        'l2_leaf_reg': [1.0, 3.0, 5.0],
+        'bagging_temperature': [0.33, 0.66, 1.0]
+    }
+    grid_search = GridSearchCV(estimator=clf, param_grid=param_grid, scoring='accuracy')
     start_time = time.time()
-    clf.fit(x_train, y_train)
+    grid_search.fit(x_train, y_train)
     end_time = time.time()
     exec_time = end_time - start_time
-    CBC_tpred = clf.predict(x_train)
-    CBC_tacc = accuracy_score(y_train, CBC_tpred)
-    y_pred = clf.predict(x_test)
+    best_model = grid_search.best_estimator_
+    y_pred = best_model.predict(x_test)
+    start_time = time.time()
+    best_model.fit(x_train, y_train)
+    end_time = time.time()
+    best_exec_time = end_time - start_time
     CBCacc = accuracy_score(y_test, y_pred)
-    report = classification_report(y_test, y_pred, output_dict=True)
-    print("------CatBoostClassifier------")
-    print(f'Accuracy on the train set: {CBC_tacc:.4f}')
+    cm = confusion_matrix(y_test, y_pred)
+    tn, fp, fn, tp = cm.ravel()
+    precision = tp / (tp + fp)
+    recall = tp / (tp + fn)
+    f1_score = 2 * ((precision * recall) / (precision + recall))
+    print("------CatBoost------")
     print(f'Accuracy on the test set: {CBCacc:.4f}')
     print(classification_report(y_test, y_pred))
     writer.writerow([
-        "CatBoostClassifier", round(CBC_tacc * 100, 2), round(CBCacc * 100, 2),
-        round(report['weighted avg']['precision'] * 100, 2),
-        round(report['weighted avg']['recall'] * 100, 2),
-        round(report['weighted avg']['f1-score'] * 100, 2),
+        "CatBoost", round(CBCacc * 100, 2),
+        round(precision, 2), round(recall, 2), round(f1_score, 2),
+        tn, fp, tp, fn,
         n_estimators,
-        round(exec_time, 2)
-    ])
-
-    clf = CatBoostRegressor(n_estimators=n_estimators)
-    start_time = time.time()
-    clf.fit(x_train, y_train)
-    end_time = time.time()
-    exec_time = end_time - start_time
-    CBR_tpred = clf.predict(x_train)
-    fpr, tpr, tresholds = roc_curve(y_train, CBR_tpred)
-    j_scores = tpr - fpr
-    optimal_idx = np.argmax(j_scores)
-    optimal_treshold = tresholds[optimal_idx]
-    y_pred = (CBR_tpred >= optimal_treshold).astype(int)
-    CBR_tacc = accuracy_score(y_train, y_pred)
-    CBRpred = clf.predict(x_test)
-    fpr, tpr, tresholds = roc_curve(y_test, CBRpred)
-    j_scores = tpr - fpr
-    optimal_idx = np.argmax(j_scores)
-    optimal_treshold = tresholds[optimal_idx]
-    y_pred = (CBRpred >= optimal_treshold).astype(int)
-    CBRacc = accuracy_score(y_test, y_pred)
-    report = classification_report(y_test, y_pred, output_dict=True)
-    print("------CatBoostRegressor------")
-    print(f'Accuracy on the train set: {CBR_tacc:.4f}')
-    print(f'Accuracy on the test set: {CBRacc:.4f}')
-    print(classification_report(y_test, y_pred))
-    writer.writerow([
-        "CatBoostRegressor", round(CBR_tacc * 100, 2), round(CBRacc * 100, 2),
-        round(report['weighted avg']['precision'] * 100, 2),
-        round(report['weighted avg']['recall'] * 100, 2),
-        round(report['weighted avg']['f1-score'] * 100, 2),
-        n_estimators,
-        round(exec_time, 2)
+        round(best_exec_time, 2),
+        round(exec_time, 2),
+        round(n_estimators/best_exec_time, 4)
     ])
 
     n_estimators = 300
-    clf = NGBClassifier(n_estimators=n_estimators)
+    clf = NGBClassifier()
+    param_grid = {
+        'n_estimators': [n_estimators],
+        'random_state': [42],
+        'learning_rate': [0.001, 0.01],
+        'minibatch_frac': [0.5, 1.0],
+        'col_sample': [0.5, 1.0]
+    }
+    grid_search = GridSearchCV(estimator=clf, param_grid=param_grid, scoring='accuracy')
     start_time = time.time()
-    clf.fit(x_train, y_train)
+    grid_search.fit(x_train, y_train)
     end_time = time.time()
     exec_time = end_time - start_time
-    NGC_tpred = clf.predict(x_train)
-    NGC_tacc = accuracy_score(y_train, NGC_tpred)
-    y_pred = clf.predict(x_test)
+    best_model = grid_search.best_estimator_
+    y_pred = best_model.predict(x_test)
+    start_time = time.time()
+    best_model.fit(x_train, y_train)
+    end_time = time.time()
+    best_exec_time = end_time - start_time
     NGCacc = accuracy_score(y_test, y_pred)
-    report = classification_report(y_test, y_pred, output_dict=True)
-    print("------NGBoostClassifier------")
-    print(f'Accuracy on the train set: {NGC_tacc:.4f}')
+    cm = confusion_matrix(y_test, y_pred)
+    tn, fp, fn, tp = cm.ravel()
+    precision = tp / (tp + fp)
+    recall = tp / (tp + fn)
+    f1_score = 2 * ((precision * recall) / (precision + recall))
+    print("------NGBoost------")
     print(f'Accuracy on the test set: {NGCacc:.4f}')
     print(classification_report(y_test, y_pred))
     writer.writerow([
-        "NGBoostClassifier", round(NGC_tacc * 100, 2), round(NGCacc * 100, 2),
-        round(report['weighted avg']['precision'] * 100, 2),
-        round(report['weighted avg']['recall'] * 100, 2),
-        round(report['weighted avg']['f1-score'] * 100, 2),
+        "NGBoost", round(NGCacc * 100, 2),
+        round(precision, 2), round(recall, 2), round(f1_score, 2),
+        tn, fp, tp, fn,
         n_estimators,
-        round(exec_time, 2)
-    ])
-
-    clf = NGBRegressor(n_estimators=n_estimators)
-    start_time = time.time()
-    clf.fit(x_train, y_train)
-    end_time = time.time()
-    exec_time = end_time - start_time
-    NGR_tpred = clf.predict(x_train)
-    fpr, tpr, tresholds = roc_curve(y_train, NGR_tpred)
-    j_scores = tpr - fpr
-    optimal_idx = np.argmax(j_scores)
-    optimal_treshold = tresholds[optimal_idx]
-    y_pred = (NGR_tpred >= optimal_treshold).astype(int)
-    NGR_tacc = accuracy_score(y_train, y_pred)
-    NGRpred = clf.predict(x_test)
-    fpr, tpr, tresholds = roc_curve(y_test, NGRpred)
-    j_scores = tpr - fpr
-    optimal_idx = np.argmax(j_scores)
-    optimal_treshold = tresholds[optimal_idx]
-    y_pred = (NGRpred >= optimal_treshold).astype(int)
-    NGRacc = accuracy_score(y_test, y_pred)
-    report = classification_report(y_test, y_pred, output_dict=True)
-    print("------NGBoostRegressor------")
-    print(f'Accuracy on the train set: {NGR_tacc:.4f}')
-    print(f'Accuracy on the test set: {NGRacc:.4f}')
-    print(classification_report(y_test, y_pred))
-    writer.writerow([
-        "NGBoostRegressor", round(NGR_tacc * 100, 2), round(NGRacc * 100, 2),
-        round(report['weighted avg']['precision'] * 100, 2),
-        round(report['weighted avg']['recall'] * 100, 2),
-        round(report['weighted avg']['f1-score'] * 100, 2),
-        n_estimators,
-        round(exec_time, 2)
-    ])
-
-    from pgbm.sklearn import HistGradientBoostingRegressor
-    max_iter = 650
-    clf = HistGradientBoostingRegressor(max_iter=max_iter)
-    start_time = time.time()
-    clf.fit(x_train, y_train)
-    end_time = time.time()
-    exec_time = end_time - start_time
-    HGBR_tpred = clf.predict(x_train)
-    fpr, tpr, tresholds = roc_curve(y_train, HGBR_tpred)
-    j_scores = tpr - fpr
-    optimal_idx = np.argmax(j_scores)
-    optimal_treshold = tresholds[optimal_idx]
-    y_pred = (HGBR_tpred >= optimal_treshold).astype(int)
-    HGBR_tacc = accuracy_score(y_train, y_pred)
-    HGBRpred = clf.predict(x_test)
-    fpr, tpr, tresholds = roc_curve(y_test, HGBRpred)
-    j_scores = tpr - fpr
-    optimal_idx = np.argmax(j_scores)
-    optimal_treshold = tresholds[optimal_idx]
-    y_pred = (HGBRpred >= optimal_treshold).astype(int)
-    HGBRacc = accuracy_score(y_test, y_pred)
-    report = classification_report(y_test, y_pred, output_dict=True)
-    print("------PGBM------")
-    print(f'Accuracy on the train set: {HGBR_tacc:.4f}')
-    print(f'Accuracy on the test set: {HGBRacc:.4f}')
-    print(classification_report(y_test, y_pred))
-    writer.writerow([
-        "PGBM", round(HGBR_tacc * 100, 2), round(HGBRacc * 100, 2),
-        round(report['weighted avg']['precision'] * 100, 2),
-        round(report['weighted avg']['recall'] * 100, 2),
-        round(report['weighted avg']['f1-score'] * 100, 2),
-        max_iter,
-        round(exec_time, 2)
+        round(best_exec_time, 2),
+        round(exec_time, 2),
+        round(n_estimators/best_exec_time, 4)
     ])
 
     n_estimators = 900
-    clf = BoostingRegressor(
-        base_estimator=DecisionTreeRegressor(max_depth=3),
+    clf = BoostingClassifier(
         n_estimators=n_estimators,
+        base_estimator=DecisionTreeRegressor(max_depth=3),
         learning_rate=0.1
     )
     start_time = time.time()
     clf.fit(x_train, y_train)
     end_time = time.time()
-    exec_time = end_time - start_time
-    STR_tpred = clf.predict(x_train)
-    fpr, tpr, tresholds = roc_curve(y_train, STR_tpred)
-    j_scores = tpr - fpr
-    optimal_idx = np.argmax(j_scores)
-    optimal_treshold = tresholds[optimal_idx]
-    y_pred = (STR_tpred >= optimal_treshold).astype(int)
-    STR_tacc = accuracy_score(y_train, y_pred)
-    STRpred = clf.predict(x_test)
-    fpr, tpr, tresholds = roc_curve(y_test, STRpred)
-    j_scores = tpr - fpr
-    optimal_idx = np.argmax(j_scores)
-    optimal_treshold = tresholds[optimal_idx]
-    y_pred = (STRpred >= optimal_treshold).astype(int)
+    best_exec_time = end_time - start_time
+    y_pred = clf.predict(x_test)
     STRacc = accuracy_score(y_test, y_pred)
-    report = classification_report(y_test, y_pred, output_dict=True)
-    print("------StarBoostRegressor------")
-    print(f'Accuracy on the train set: {STR_tacc:.4f}')
+    cm = confusion_matrix(y_test, y_pred)
+    tn, fp, fn, tp = cm.ravel()
+    precision = tp / (tp + fp)
+    recall = tp / (tp + fn)
+    f1_score = 2 * ((precision * recall) / (precision + recall))
+    print("------StarBoost------")
     print(f'Accuracy on the test set: {STRacc:.4f}')
     print(classification_report(y_test, y_pred))
     writer.writerow([
-        "StarBoost", round(STR_tacc * 100, 2), round(STRacc * 100, 2),
-        round(report['weighted avg']['precision'] * 100, 2),
-        round(report['weighted avg']['recall'] * 100, 2),
-        round(report['weighted avg']['f1-score'] * 100, 2),
+        "StarBoost", round(STRacc * 100, 2),
+        round(precision, 2), round(recall, 2), round(f1_score, 2),
+        tn, fp, tp, fn,
         n_estimators,
-        round(exec_time, 2)
+        round(best_exec_time, 2),
+        round(best_exec_time, 2),
+        round(n_estimators/best_exec_time, 4)
     ])
