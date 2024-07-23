@@ -44,25 +44,52 @@ mms.fit(x_train)
 x_train = mms.transform(x_train)
 x_test = mms.transform(x_test)
 
-with open("models_results_attack_type_OVO.csv", "a", newline="") as file:
-    def get_confusion_matrix_elements(cm):
-        FP = cm.sum(axis=0) - np.diag(cm)
-        FN = cm.sum(axis=1) - np.diag(cm)
-        TP = np.diag(cm)
-        TN = cm.sum() - (FP + FN + TP)
-        return TN, FP, FN, TP
+# conversione in indici di tipo int per poterli usare per le posizioni dell'array
+unique_classes = np.unique(y_train)
+class_to_index = {cls: idx for idx, cls in enumerate(unique_classes)}
+index_to_class = {idx: cls for idx, cls in enumerate(unique_classes)}
+class_pairs = [(i, j) for i in unique_classes for j in unique_classes if i < j]  # tutte le coppie di classi
 
+
+def get_confusion_matrix_elements(cm):
+    FP = cm.sum(axis=0) - np.diag(cm)
+    FN = cm.sum(axis=1) - np.diag(cm)
+    TP = np.diag(cm)
+    TN = cm.sum() - (FP + FN + TP)
+    return TN, FP, FN, TP
+
+def ovo_predict(X):
+    votes = np.zeros((X.shape[0], len(np.unique(y_train))))  # creo matrice di voti
+
+    for (i, j), clf in classifiers.items():
+        # seleziono subset come prima
+        idx = np.where((y_test == i) | (y_test == j))[0]
+        x_pair_test = x_test[idx]
+        y_pair_test = y_test[idx]
+
+        pred = clf.predict(x_pair_test)
+
+        if not np.isnan(
+                pred).any():  # il modello genera errori su alcune coppie, è un problema nel metodo fit, interno al modello
+            # per convertire l'output della log function a binario
+            fpr, tpr, tresholds = roc_curve(y_pair_test, pred, pos_label=i)
+            j_scores = tpr - fpr
+            optimal_idx = np.argmax(j_scores)
+            optimal_treshold = tresholds[optimal_idx]
+            binary_pred = (pred >= optimal_treshold).astype(int)
+
+            # aggiungo i voti del classificatore alla matrice
+            votes[idx, class_to_index[i]] += (binary_pred == 0)
+            votes[idx, class_to_index[j]] += (binary_pred == 1)
+
+    return np.array([index_to_class[np.argmax(vote)] for vote in votes])
+
+
+with open("models_results_attack_type_OVO.csv", "a", newline="") as file:
     writer = csv.writer(file)
     writer.writerow(['Name', 'Test Accuracy', 'Precision', 'Recall', 'F1-score'])
 
-    # conversione in indici di tipo int per poterli usare per le posizioni dell'array
-    unique_classes = np.unique(y_train)
-    class_to_index = {cls: idx for idx, cls in enumerate(unique_classes)}
-    index_to_class = {idx: cls for idx, cls in enumerate(unique_classes)}
-
-    class_pairs = [(i, j) for i in unique_classes for j in unique_classes if i < j] # tutte le coppie di classi
     classifiers = {}
-
     for (i, j) in class_pairs:
         # seleziono il subset contenente gli elementi della coppia
         idx = np.where((y_train == i) | (y_train == j))[0]
@@ -75,37 +102,7 @@ with open("models_results_attack_type_OVO.csv", "a", newline="") as file:
         clf = PerpetualBooster(objective="LogLoss")
         clf.fit(x_pair, y_pair_binary, budget=0.1)
         classifiers[(i, j)] = clf
-
-    def ovo_predict(X):
-        votes = np.zeros((X.shape[0], len(np.unique(y_train)))) # creo matrice di voti
-
-        count = 0
-        for (i, j), clf in classifiers.items():
-            # seleziono subset come prima
-            idx = np.where((y_test == i) | (y_test == j))[0]
-            x_pair_test = x_test[idx]
-            y_pair_test = y_test[idx]
-
-            pred = clf.predict(x_pair_test)
-
-            if not np.isnan(pred).any():  # il modello genera errori su alcune coppie, è un problema nel metodo fit, interno al modello
-                # per convertire l'output della log function a binario
-                fpr, tpr, tresholds = roc_curve(y_pair_test, pred, pos_label=j)
-                j_scores = tpr - fpr
-                optimal_idx = np.argmax(j_scores)
-                optimal_treshold = tresholds[optimal_idx]
-                binary_pred = (pred >= optimal_treshold).astype(int)
-
-                # aggiungo i voti del classificatore alla matrice
-                votes[idx, class_to_index[i]] += (binary_pred == 0)
-                votes[idx, class_to_index[j]] += (binary_pred == 1)
-
-            print('{} pair done'.format(count))
-            count+=1
-
-        return np.array([index_to_class[np.argmax(vote)] for vote in votes])
     y_pred = ovo_predict(x_test)
-
     PPBacc = accuracy_score(y_test, y_pred)
     cm = confusion_matrix(y_test, y_pred)
     tn, fp, fn, tp = get_confusion_matrix_elements(cm)
@@ -121,9 +118,20 @@ with open("models_results_attack_type_OVO.csv", "a", newline="") as file:
     ])
 
     max_iter = 50
-    clf = SGDClassifier(max_iter=max_iter, random_state=42)
-    clf.fit(x_train, y_train)
-    y_pred = clf.predict(x_test)
+    classifiers = {}
+    for (i, j) in class_pairs:
+        # seleziono il subset contenente gli elementi della coppia
+        idx = np.where((y_train == i) | (y_train == j))[0]
+        x_pair = x_train[idx]
+        y_pair = y_train[idx]
+
+        # conversione in 0-1, altrimenti non viene accettato da perpetual
+        y_pair_binary = np.where(y_pair == i, 0, 1)
+
+        clf = SGDClassifier(max_iter=max_iter, random_state=42)
+        clf.fit(x_pair, y_pair_binary)
+        classifiers[(i, j)] = clf
+    y_pred = ovo_predict(x_test)
     SGCacc = accuracy_score(y_test, y_pred)
     cm = confusion_matrix(y_test, y_pred)
     tn, fp, fn, tp = get_confusion_matrix_elements(cm)
@@ -138,9 +146,20 @@ with open("models_results_attack_type_OVO.csv", "a", newline="") as file:
         round(mean(precision), 2), round(mean(recall), 2), round(mean(f1_score), 2),
     ])
 
-    clf = CategoricalNB()
-    clf.fit(x_train, y_train)
-    y_pred = clf.predict(x_test)
+    classifiers = {}
+    for (i, j) in class_pairs:
+        # seleziono il subset contenente gli elementi della coppia
+        idx = np.where((y_train == i) | (y_train == j))[0]
+        x_pair = x_train[idx]
+        y_pair = y_train[idx]
+
+        # conversione in 0-1, altrimenti non viene accettato da perpetual
+        y_pair_binary = np.where(y_pair == i, 0, 1)
+
+        clf = CategoricalNB()
+        clf.fit(x_pair, y_pair_binary)
+        classifiers[(i, j)] = clf
+    y_pred = ovo_predict(x_test)
     CANBacc = accuracy_score(y_test, y_pred)
     cm = confusion_matrix(y_test, y_pred)
     tn, fp, fn, tp = get_confusion_matrix_elements(cm)
@@ -155,9 +174,20 @@ with open("models_results_attack_type_OVO.csv", "a", newline="") as file:
         round(mean(precision), 2), round(mean(recall), 2), round(mean(f1_score), 2),
     ])
 
-    clf = KNeighborsClassifier(algorithm='kd_tree')
-    clf.fit(x_train, y_train)
-    y_pred = clf.predict(x_test)
+    classifiers = {}
+    for (i, j) in class_pairs:
+        # seleziono il subset contenente gli elementi della coppia
+        idx = np.where((y_train == i) | (y_train == j))[0]
+        x_pair = x_train[idx]
+        y_pair = y_train[idx]
+
+        # conversione in 0-1, altrimenti non viene accettato da perpetual
+        y_pair_binary = np.where(y_pair == i, 0, 1)
+
+        clf = KNeighborsClassifier(algorithm='kd_tree')
+        clf.fit(x_pair, y_pair_binary)
+        classifiers[(i, j)] = clf
+    y_pred = ovo_predict(x_test)
     KNNacc = accuracy_score(y_test, y_pred)
     cm = confusion_matrix(y_test, y_pred)
     tn, fp, fn, tp = get_confusion_matrix_elements(cm)
@@ -172,9 +202,20 @@ with open("models_results_attack_type_OVO.csv", "a", newline="") as file:
         round(mean(precision), 2), round(mean(recall), 2), round(mean(f1_score), 2),
     ])
 
-    clf = NearestCentroid()
-    clf.fit(x_train, y_train)
-    y_pred = clf.predict(x_test)
+    classifiers = {}
+    for (i, j) in class_pairs:
+        # seleziono il subset contenente gli elementi della coppia
+        idx = np.where((y_train == i) | (y_train == j))[0]
+        x_pair = x_train[idx]
+        y_pair = y_train[idx]
+
+        # conversione in 0-1, altrimenti non viene accettato da perpetual
+        y_pair_binary = np.where(y_pair == i, 0, 1)
+
+        clf = NearestCentroid()
+        clf.fit(x_pair, y_pair_binary)
+        classifiers[(i, j)] = clf
+    y_pred = ovo_predict(x_test)
     NECacc = accuracy_score(y_test, y_pred)
     cm = confusion_matrix(y_test, y_pred)
     tn, fp, fn, tp = get_confusion_matrix_elements(cm)
@@ -190,9 +231,20 @@ with open("models_results_attack_type_OVO.csv", "a", newline="") as file:
     ])
 
     max_iter = 50
-    clf = svm.LinearSVC(max_iter=max_iter, random_state=42)
-    clf.fit(x_train, y_train)
-    y_pred = clf.predict(x_test)
+    classifiers = {}
+    for (i, j) in class_pairs:
+        # seleziono il subset contenente gli elementi della coppia
+        idx = np.where((y_train == i) | (y_train == j))[0]
+        x_pair = x_train[idx]
+        y_pair = y_train[idx]
+
+        # conversione in 0-1, altrimenti non viene accettato da perpetual
+        y_pair_binary = np.where(y_pair == i, 0, 1)
+
+        clf = svm.LinearSVC(max_iter=max_iter, random_state=42)
+        clf.fit(x_pair, y_pair_binary)
+        classifiers[(i, j)] = clf
+    y_pred = ovo_predict(x_test)
     SVCacc = accuracy_score(y_test, y_pred)
     cm = confusion_matrix(y_test, y_pred)
     tn, fp, fn, tp = get_confusion_matrix_elements(cm)
@@ -207,9 +259,20 @@ with open("models_results_attack_type_OVO.csv", "a", newline="") as file:
         round(mean(precision), 2), round(mean(recall), 2), round(mean(f1_score), 2),
     ])
 
-    clf = DecisionTreeClassifier(random_state=42)
-    clf.fit(x_train, y_train)
-    y_pred = clf.predict(x_test)
+    classifiers = {}
+    for (i, j) in class_pairs:
+        # seleziono il subset contenente gli elementi della coppia
+        idx = np.where((y_train == i) | (y_train == j))[0]
+        x_pair = x_train[idx]
+        y_pair = y_train[idx]
+
+        # conversione in 0-1, altrimenti non viene accettato da perpetual
+        y_pair_binary = np.where(y_pair == i, 0, 1)
+
+        clf = DecisionTreeClassifier(random_state=42)
+        clf.fit(x_pair, y_pair_binary)
+        classifiers[(i, j)] = clf
+    y_pred = ovo_predict(x_test)
     DTCacc = accuracy_score(y_test, y_pred)
     cm = confusion_matrix(y_test, y_pred)
     tn, fp, fn, tp = get_confusion_matrix_elements(cm)
@@ -225,9 +288,20 @@ with open("models_results_attack_type_OVO.csv", "a", newline="") as file:
     ])
 
     n_estimators = 100
-    clf = RandomForestClassifier(n_estimators=n_estimators, random_state=42)
-    clf.fit(x_train, y_train)
-    y_pred = clf.predict(x_test)
+    classifiers = {}
+    for (i, j) in class_pairs:
+        # seleziono il subset contenente gli elementi della coppia
+        idx = np.where((y_train == i) | (y_train == j))[0]
+        x_pair = x_train[idx]
+        y_pair = y_train[idx]
+
+        # conversione in 0-1, altrimenti non viene accettato da perpetual
+        y_pair_binary = np.where(y_pair == i, 0, 1)
+
+        clf = RandomForestClassifier(n_estimators=n_estimators, random_state=42)
+        clf.fit(x_pair, y_pair_binary)
+        classifiers[(i, j)] = clf
+    y_pred = ovo_predict(x_test)
     RFCacc = accuracy_score(y_test, y_pred)
     cm = confusion_matrix(y_test, y_pred)
     tn, fp, fn, tp = get_confusion_matrix_elements(cm)
@@ -243,9 +317,20 @@ with open("models_results_attack_type_OVO.csv", "a", newline="") as file:
     ])
 
     n_estimators = 50
-    clf = ExtraTreesClassifier(n_estimators=n_estimators, random_state=42)
-    clf.fit(x_train, y_train)
-    y_pred = clf.predict(x_test)
+    classifiers = {}
+    for (i, j) in class_pairs:
+        # seleziono il subset contenente gli elementi della coppia
+        idx = np.where((y_train == i) | (y_train == j))[0]
+        x_pair = x_train[idx]
+        y_pair = y_train[idx]
+
+        # conversione in 0-1, altrimenti non viene accettato da perpetual
+        y_pair_binary = np.where(y_pair == i, 0, 1)
+
+        clf = ExtraTreesClassifier(n_estimators=n_estimators, random_state=42)
+        clf.fit(x_pair, y_pair_binary)
+        classifiers[(i, j)] = clf
+    y_pred = ovo_predict(x_test)
     ETacc = accuracy_score(y_test, y_pred)
     cm = confusion_matrix(y_test, y_pred)
     tn, fp, fn, tp = get_confusion_matrix_elements(cm)
@@ -261,9 +346,20 @@ with open("models_results_attack_type_OVO.csv", "a", newline="") as file:
     ])
 
     max_iter = 125
-    clf = MLPClassifier(max_iter=max_iter, random_state=42)
-    clf.fit(x_train, y_train)
-    y_pred = clf.predict(x_test)
+    classifiers = {}
+    for (i, j) in class_pairs:
+        # seleziono il subset contenente gli elementi della coppia
+        idx = np.where((y_train == i) | (y_train == j))[0]
+        x_pair = x_train[idx]
+        y_pair = y_train[idx]
+
+        # conversione in 0-1, altrimenti non viene accettato da perpetual
+        y_pair_binary = np.where(y_pair == i, 0, 1)
+
+        clf = MLPClassifier(max_iter=max_iter, random_state=42)
+        clf.fit(x_pair, y_pair_binary)
+        classifiers[(i, j)] = clf
+    y_pred = ovo_predict(x_test)
     MLCacc = accuracy_score(y_test, y_pred)
     cm = confusion_matrix(y_test, y_pred)
     tn, fp, fn, tp = get_confusion_matrix_elements(cm)
@@ -279,9 +375,20 @@ with open("models_results_attack_type_OVO.csv", "a", newline="") as file:
     ])
 
     n_estimators = 750
-    clf = GradientBoostingClassifier(n_estimators=n_estimators, random_state=42)
-    clf.fit(x_train, y_train)
-    y_pred = clf.predict(x_test)
+    classifiers = {}
+    for (i, j) in class_pairs:
+        # seleziono il subset contenente gli elementi della coppia
+        idx = np.where((y_train == i) | (y_train == j))[0]
+        x_pair = x_train[idx]
+        y_pair = y_train[idx]
+
+        # conversione in 0-1, altrimenti non viene accettato da perpetual
+        y_pair_binary = np.where(y_pair == i, 0, 1)
+
+        clf = GradientBoostingClassifier(n_estimators=n_estimators, random_state=42)
+        clf.fit(x_pair, y_pair_binary)
+        classifiers[(i, j)] = clf
+    y_pred = ovo_predict(x_test)
     GBCacc = accuracy_score(y_test, y_pred)
     cm = confusion_matrix(y_test, y_pred)
     tn, fp, fn, tp = get_confusion_matrix_elements(cm)
@@ -297,9 +404,20 @@ with open("models_results_attack_type_OVO.csv", "a", newline="") as file:
     ])
 
     max_iter = 400
-    clf = HistGradientBoostingClassifier(max_iter=max_iter, random_state=42)
-    clf.fit(x_train, y_train)
-    y_pred = clf.predict(x_test)
+    classifiers = {}
+    for (i, j) in class_pairs:
+        # seleziono il subset contenente gli elementi della coppia
+        idx = np.where((y_train == i) | (y_train == j))[0]
+        x_pair = x_train[idx]
+        y_pair = y_train[idx]
+
+        # conversione in 0-1, altrimenti non viene accettato da perpetual
+        y_pair_binary = np.where(y_pair == i, 0, 1)
+
+        clf = HistGradientBoostingClassifier(max_iter=max_iter, random_state=42)
+        clf.fit(x_pair, y_pair_binary)
+        classifiers[(i, j)] = clf
+    y_pred = ovo_predict(x_test)
     HGBCacc = accuracy_score(y_test, y_pred)
     cm = confusion_matrix(y_test, y_pred)
     tn, fp, fn, tp = get_confusion_matrix_elements(cm)
@@ -315,9 +433,20 @@ with open("models_results_attack_type_OVO.csv", "a", newline="") as file:
     ])
 
     n_estimators = 500
-    clf = AdaBoostClassifier(n_estimators=n_estimators, random_state=42)
-    clf.fit(x_train, y_train)
-    y_pred = clf.predict(x_test)
+    classifiers = {}
+    for (i, j) in class_pairs:
+        # seleziono il subset contenente gli elementi della coppia
+        idx = np.where((y_train == i) | (y_train == j))[0]
+        x_pair = x_train[idx]
+        y_pair = y_train[idx]
+
+        # conversione in 0-1, altrimenti non viene accettato da perpetual
+        y_pair_binary = np.where(y_pair == i, 0, 1)
+
+        clf = AdaBoostClassifier(n_estimators=n_estimators, random_state=42)
+        clf.fit(x_pair, y_pair_binary)
+        classifiers[(i, j)] = clf
+    y_pred = ovo_predict(x_test)
     ADACacc = accuracy_score(y_test, y_pred)
     cm = confusion_matrix(y_test, y_pred)
     tn, fp, fn, tp = get_confusion_matrix_elements(cm)
@@ -333,9 +462,20 @@ with open("models_results_attack_type_OVO.csv", "a", newline="") as file:
     ])
 
     n_estimators = 350
-    clf = XGBClassifier(n_estimators=n_estimators, random_state=42)
-    clf.fit(x_train, y_train)
-    y_pred = clf.predict(x_test)
+    classifiers = {}
+    for (i, j) in class_pairs:
+        # seleziono il subset contenente gli elementi della coppia
+        idx = np.where((y_train == i) | (y_train == j))[0]
+        x_pair = x_train[idx]
+        y_pair = y_train[idx]
+
+        # conversione in 0-1, altrimenti non viene accettato da perpetual
+        y_pair_binary = np.where(y_pair == i, 0, 1)
+
+        clf = XGBClassifier(n_estimators=n_estimators, random_state=42)
+        clf.fit(x_pair, y_pair_binary)
+        classifiers[(i, j)] = clf
+    y_pred = ovo_predict(x_test)
     XGBacc = accuracy_score(y_test, y_pred)
     cm = confusion_matrix(y_test, y_pred)
     tn, fp, fn, tp = get_confusion_matrix_elements(cm)
@@ -351,9 +491,20 @@ with open("models_results_attack_type_OVO.csv", "a", newline="") as file:
     ])
 
     n_estimators = 700
-    clf = LGBMClassifier(n_estimators=n_estimators, random_state=42)
-    clf.fit(x_train, y_train)
-    y_pred = clf.predict(x_test)
+    classifiers = {}
+    for (i, j) in class_pairs:
+        # seleziono il subset contenente gli elementi della coppia
+        idx = np.where((y_train == i) | (y_train == j))[0]
+        x_pair = x_train[idx]
+        y_pair = y_train[idx]
+
+        # conversione in 0-1, altrimenti non viene accettato da perpetual
+        y_pair_binary = np.where(y_pair == i, 0, 1)
+
+        clf = LGBMClassifier(n_estimators=n_estimators, random_state=42)
+        clf.fit(x_pair, y_pair_binary)
+        classifiers[(i, j)] = clf
+    y_pred = ovo_predict(x_test)
     LGCacc = accuracy_score(y_test, y_pred)
     cm = confusion_matrix(y_test, y_pred)
     tn, fp, fn, tp = get_confusion_matrix_elements(cm)
@@ -369,9 +520,20 @@ with open("models_results_attack_type_OVO.csv", "a", newline="") as file:
     ])
 
     n_estimators = 250
-    clf = CatBoostClassifier(n_estimators=n_estimators, random_state=42)
-    clf.fit(x_train, y_train)
-    y_pred = clf.predict(x_test)
+    classifiers = {}
+    for (i, j) in class_pairs:
+        # seleziono il subset contenente gli elementi della coppia
+        idx = np.where((y_train == i) | (y_train == j))[0]
+        x_pair = x_train[idx]
+        y_pair = y_train[idx]
+
+        # conversione in 0-1, altrimenti non viene accettato da perpetual
+        y_pair_binary = np.where(y_pair == i, 0, 1)
+
+        clf = CatBoostClassifier(n_estimators=n_estimators, random_state=42)
+        clf.fit(x_pair, y_pair_binary)
+        classifiers[(i, j)] = clf
+    y_pred = ovo_predict(x_test)
     CBCacc = accuracy_score(y_test, y_pred)
     cm = confusion_matrix(y_test, y_pred)
     tn, fp, fn, tp = get_confusion_matrix_elements(cm)
@@ -387,9 +549,20 @@ with open("models_results_attack_type_OVO.csv", "a", newline="") as file:
     ])
 
     n_estimators = 300
-    clf = NGBClassifier(n_estimators=n_estimators, random_state=42)
-    clf.fit(x_train, y_train)
-    y_pred = clf.predict(x_test)
+    classifiers = {}
+    for (i, j) in class_pairs:
+        # seleziono il subset contenente gli elementi della coppia
+        idx = np.where((y_train == i) | (y_train == j))[0]
+        x_pair = x_train[idx]
+        y_pair = y_train[idx]
+
+        # conversione in 0-1, altrimenti non viene accettato da perpetual
+        y_pair_binary = np.where(y_pair == i, 0, 1)
+
+        clf = NGBClassifier(n_estimators=n_estimators, random_state=42)
+        clf.fit(x_pair, y_pair_binary)
+        classifiers[(i, j)] = clf
+    y_pred = ovo_predict(x_test)
     NGCacc = accuracy_score(y_test, y_pred)
     cm = confusion_matrix(y_test, y_pred)
     tn, fp, fn, tp = get_confusion_matrix_elements(cm)
@@ -405,13 +578,24 @@ with open("models_results_attack_type_OVO.csv", "a", newline="") as file:
     ])
 
     n_estimators = 900
-    clf = BoostingClassifier(
-        n_estimators=n_estimators,
-        base_estimator=DecisionTreeRegressor(max_depth=3),
-        learning_rate=0.1
-    )
-    clf.fit(x_train, y_train)
-    y_pred = clf.predict(x_test)
+    classifiers = {}
+    for (i, j) in class_pairs:
+        # seleziono il subset contenente gli elementi della coppia
+        idx = np.where((y_train == i) | (y_train == j))[0]
+        x_pair = x_train[idx]
+        y_pair = y_train[idx]
+
+        # conversione in 0-1, altrimenti non viene accettato da perpetual
+        y_pair_binary = np.where(y_pair == i, 0, 1)
+
+        clf = BoostingClassifier(
+            n_estimators=n_estimators,
+            base_estimator=DecisionTreeRegressor(max_depth=3),
+            learning_rate=0.1
+        )
+        clf.fit(x_pair, y_pair_binary)
+        classifiers[(i, j)] = clf
+    y_pred = ovo_predict(x_test)
     STRacc = accuracy_score(y_test, y_pred)
     cm = confusion_matrix(y_test, y_pred)
     tn, fp, fn, tp = get_confusion_matrix_elements(cm)
