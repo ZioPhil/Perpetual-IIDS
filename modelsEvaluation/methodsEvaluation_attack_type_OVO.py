@@ -58,7 +58,8 @@ def get_confusion_matrix_elements(cm):
     TN = cm.sum() - (FP + FN + TP)
     return TN, FP, FN, TP
 
-def ovo_predict(X):
+
+def ovo_predict_perpetual(X):
     votes = np.zeros((X.shape[0], len(np.unique(y_train))))  # creo matrice di voti
 
     for (i, j), clf in classifiers.items():
@@ -69,10 +70,9 @@ def ovo_predict(X):
 
         pred = clf.predict(x_pair_test)
 
-        if not np.isnan(
-                pred).any():  # il modello genera errori su alcune coppie, è un problema nel metodo fit, interno al modello
+        if not np.isnan(pred).any():  # il modello genera errori su alcune coppie, è un problema nel metodo fit, interno al modello
             # per convertire l'output della log function a binario
-            fpr, tpr, tresholds = roc_curve(y_pair_test, pred, pos_label=i)
+            fpr, tpr, tresholds = roc_curve(y_pair_test, pred, pos_label=j)
             j_scores = tpr - fpr
             optimal_idx = np.argmax(j_scores)
             optimal_treshold = tresholds[optimal_idx]
@@ -81,6 +81,24 @@ def ovo_predict(X):
             # aggiungo i voti del classificatore alla matrice
             votes[idx, class_to_index[i]] += (binary_pred == 0)
             votes[idx, class_to_index[j]] += (binary_pred == 1)
+
+    return np.array([index_to_class[np.argmax(vote)] for vote in votes])
+
+
+def ovo_predict(X):
+    votes = np.zeros((X.shape[0], len(np.unique(y_train))))  # creo matrice di voti
+
+    for (i, j), clf in classifiers.items():
+        # seleziono subset come prima
+        idx = np.where((y_test == i) | (y_test == j))[0]
+        x_pair_test = x_test[idx]
+
+        pred = clf.predict(x_pair_test)
+
+        if not np.isnan(pred).any():
+            # aggiungo i voti del classificatore alla matrice
+            votes[idx, class_to_index[i]] += (pred == 0)
+            votes[idx, class_to_index[j]] += (pred == 1)
 
     return np.array([index_to_class[np.argmax(vote)] for vote in votes])
 
@@ -102,7 +120,7 @@ with open("models_results_attack_type_OVO.csv", "a", newline="") as file:
         clf = PerpetualBooster(objective="LogLoss")
         clf.fit(x_pair, y_pair_binary, budget=0.1)
         classifiers[(i, j)] = clf
-    y_pred = ovo_predict(x_test)
+    y_pred = ovo_predict_perpetual(x_test)
     PPBacc = accuracy_score(y_test, y_pred)
     cm = confusion_matrix(y_test, y_pred)
     tn, fp, fn, tp = get_confusion_matrix_elements(cm)
